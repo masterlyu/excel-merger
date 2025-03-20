@@ -12,6 +12,7 @@ export interface MappingConfig {
   description?: string;
   createdAt: string;
   updatedAt: string;
+  records: string[];  // 표준 레코드명 목록
   mappings: ColumnMapping[];
 }
 
@@ -41,7 +42,25 @@ export function loadMappingConfigs(): MappingConfig[] {
     return [];
   }
   const configsJson = localStorage.getItem(MAPPING_CONFIGS_KEY);
-  return configsJson ? JSON.parse(configsJson) : [];
+  const configs = configsJson ? JSON.parse(configsJson) : [];
+
+  // 기존 설정들을 마이그레이션
+  const migratedConfigs = configs.map((config: any) => {
+    if (!config.records) {
+      // standardFields가 있으면 그것을 사용하고, 없으면 빈 배열
+      const records = config.standardFields || [];
+      const { standardFields, ...rest } = config;
+      return { ...rest, records };
+    }
+    return config;
+  });
+
+  // 마이그레이션된 설정들을 저장
+  if (JSON.stringify(configs) !== JSON.stringify(migratedConfigs)) {
+    localStorage.setItem(MAPPING_CONFIGS_KEY, JSON.stringify(migratedConfigs));
+  }
+
+  return migratedConfigs;
 }
 
 // 매핑 설정 삭제
@@ -55,11 +74,12 @@ export function deleteMappingConfig(id: string): void {
 }
 
 // 새 매핑 설정 생성
-export function createMappingConfig(name: string, description?: string): MappingConfig {
+export function createMappingConfig(name: string, description?: string, records: string[] = []): MappingConfig {
   return {
     id: crypto.randomUUID(),
     name,
     description,
+    records,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     mappings: []

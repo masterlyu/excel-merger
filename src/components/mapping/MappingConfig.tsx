@@ -5,6 +5,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { MappingConfig, createMappingConfig, loadMappingConfigs, saveMappingConfig, deleteMappingConfig } from '@/lib/mapping';
 
 interface MappingConfigProps {
@@ -16,6 +18,7 @@ export default function MappingConfigManager({ onSelect }: MappingConfigProps) {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [newConfigName, setNewConfigName] = useState('');
   const [newConfigDescription, setNewConfigDescription] = useState('');
+  const [newRecords, setNewRecords] = useState('');  // 쉼표로 구분된 레코드명
 
   // 매핑 설정 목록 로드
   useEffect(() => {
@@ -25,13 +28,20 @@ export default function MappingConfigManager({ onSelect }: MappingConfigProps) {
 
   // 새 매핑 설정 생성
   const handleCreate = () => {
-    if (!newConfigName.trim()) return;
+    if (!newConfigName.trim() || !newRecords.trim()) return;
 
-    const newConfig = createMappingConfig(newConfigName.trim(), newConfigDescription.trim());
+    const records = newRecords.split(',').map(record => record.trim()).filter(Boolean);
+    const newConfig = createMappingConfig(
+      newConfigName.trim(), 
+      newConfigDescription.trim(),
+      records
+    );
+    
     saveMappingConfig(newConfig);
     setConfigs(prev => [...prev, newConfig]);
     setNewConfigName('');
     setNewConfigDescription('');
+    setNewRecords('');
     setIsCreateDialogOpen(false);
     onSelect(newConfig);
   };
@@ -74,6 +84,18 @@ export default function MappingConfigManager({ onSelect }: MappingConfigProps) {
                   placeholder="매핑 설정에 대한 설명"
                 />
               </div>
+              <div className="space-y-2">
+                <Label htmlFor="records">표준 레코드명 (쉼표로 구분)</Label>
+                <Input
+                  id="records"
+                  value={newRecords}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setNewRecords(e.target.value)}
+                  placeholder="예: 상품코드, 상품명, 수량, 단가, 금액"
+                />
+                <p className="text-sm text-gray-500">
+                  쉼표(,)로 구분하여 표준 레코드명을 입력하세요.
+                </p>
+              </div>
             </div>
             <div className="flex justify-end space-x-2">
               <Button variant="outline" onClick={() => setIsCreateDialogOpen(false)}>
@@ -105,7 +127,14 @@ export default function MappingConfigManager({ onSelect }: MappingConfigProps) {
                     {config.description}
                   </p>
                 )}
-                <p className="text-xs text-gray-400">
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {config.records.map((record) => (
+                    <Badge key={record} variant="secondary">
+                      {record}
+                    </Badge>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-400 mt-1">
                   생성: {new Date(config.createdAt).toLocaleDateString()}
                   {' • '}
                   수정: {new Date(config.updatedAt).toLocaleDateString()}

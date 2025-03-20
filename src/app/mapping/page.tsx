@@ -1,13 +1,19 @@
 "use client";
 
 import React from 'react';
+import dynamic from 'next/dynamic';
 import MappingConfigManager from '@/components/mapping/MappingConfig';
-import { ColumnMapper } from '@/components/mapping/ColumnMapper';
 import { loadFileInfos, readExcelFile } from '@/lib/excel';
 import { loadMappingConfigs, saveMappingConfig, ColumnMapping, MappingConfig } from '@/lib/mapping';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+
+// 클라이언트 전용으로 ColumnMapper 컴포넌트 import
+const ColumnMapper = dynamic(
+  () => import('@/components/mapping/ColumnMapper'),
+  { ssr: false }
+);
 
 export default function MappingPage() {
   const [selectedConfig, setSelectedConfig] = React.useState<string | null>(null);
@@ -30,10 +36,14 @@ export default function MappingPage() {
 
   // 매핑 설정 선택 시
   const handleConfigSelect = (config: MappingConfig) => {
+    console.log('Selected config:', config);
+    console.log('Records:', config.records);
     setSelectedConfig(config.id);
-    setMappings(config.mappings);
-    // TODO: 타겟 템플릿의 헤더 정보 설정
-    setTargetHeaders(['상품코드', '상품명', '수량', '단가', '금액']);
+    setMappings(config.mappings || []);
+    setTargetHeaders(config.records || []);
+    setSourceHeaders([]);  // 소스 헤더 초기화
+    setSelectedSourceFile(null);  // 선택된 파일 초기화
+    setSelectedSourceSheet(null);  // 선택된 시트 초기화
   };
 
   // 소스 파일 선택 시
@@ -64,6 +74,35 @@ export default function MappingPage() {
       if (firstSheet) {
         setSelectedSourceSheet(firstSheet.name);
         setSourceHeaders(firstSheet.headers);
+
+        // 자동 매핑 수행
+        if (selectedConfig) {
+          const config = mappingConfigs.find(c => c.id === selectedConfig);
+          if (config) {
+            const autoMappings: ColumnMapping[] = [];
+            firstSheet.headers.forEach(header => {
+              // 정확히 일치하는 레코드 찾기
+              const exactMatch = config.records.find(
+                record => record.toLowerCase() === header.toLowerCase()
+              );
+
+              if (exactMatch) {
+                autoMappings.push({
+                  sourceSheet: firstSheet.name,
+                  sourceColumn: header,
+                  targetColumn: exactMatch,
+                  transformRule: 'none'
+                });
+              }
+            });
+
+            setMappings(autoMappings);
+            saveMappingConfig({
+              ...config,
+              mappings: autoMappings
+            });
+          }
+        }
       }
     } catch (error) {
       console.error('Error loading source file:', error);
