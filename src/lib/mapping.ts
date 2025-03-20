@@ -45,14 +45,15 @@ export function loadMappingConfigs(): MappingConfig[] {
   const configs = configsJson ? JSON.parse(configsJson) : [];
 
   // 기존 설정들을 마이그레이션
-  const migratedConfigs = configs.map((config: any) => {
+  const migratedConfigs = configs.map((config: Partial<MappingConfig & { standardFields?: string[] }>) => {
     if (!config.records) {
       // standardFields가 있으면 그것을 사용하고, 없으면 빈 배열
       const records = config.standardFields || [];
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { standardFields, ...rest } = config;
-      return { ...rest, records };
+      return { ...rest, records } as MappingConfig;
     }
-    return config;
+    return config as MappingConfig;
   });
 
   // 마이그레이션된 설정들을 저장
