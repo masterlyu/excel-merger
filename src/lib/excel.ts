@@ -312,16 +312,19 @@ export async function saveFileInfo(file: File): Promise<ExcelFileInfo> {
           data: base64Data
         };
 
-        const fileInfos = loadFileInfos();
-        const existingIndex = fileInfos.findIndex(info => info.id === fileInfo.id);
-        
-        if (existingIndex >= 0) {
-          fileInfos[existingIndex] = fileInfo;
-        } else {
-          fileInfos.push(fileInfo);
+        if (typeof window !== 'undefined') {
+          const fileInfos = loadFileInfos();
+          const existingIndex = fileInfos.findIndex(info => info.id === fileInfo.id);
+          
+          if (existingIndex >= 0) {
+            fileInfos[existingIndex] = fileInfo;
+          } else {
+            fileInfos.push(fileInfo);
+          }
+          
+          localStorage.setItem('excel_merger_files', JSON.stringify(fileInfos));
         }
         
-        localStorage.setItem('excel_merger_files', JSON.stringify(fileInfos));
         resolve(fileInfo);
       } catch (error) {
         reject(error);
@@ -338,12 +341,18 @@ export async function saveFileInfo(file: File): Promise<ExcelFileInfo> {
 
 // 로컬 스토리지에서 파일 정보 불러오기
 export function loadFileInfos(): ExcelFileInfo[] {
+  if (typeof window === 'undefined') {
+    return [];
+  }
   const fileInfosJson = localStorage.getItem('excel_merger_files');
   return fileInfosJson ? JSON.parse(fileInfosJson) : [];
 }
 
 // 로컬 스토리지에서 파일 정보 삭제
 export function deleteFileInfo(id: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
   const fileInfos = loadFileInfos();
   const filteredInfos = fileInfos.filter(info => info.id !== id);
   localStorage.setItem('excel_merger_files', JSON.stringify(filteredInfos));

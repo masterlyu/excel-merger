@@ -2,17 +2,22 @@
 
 import React, { useCallback, useState, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { ExcelData, ExcelFileInfo, MAX_FILE_COUNT, readExcelFile, saveFileInfo, loadFileInfos, deleteFileInfo } from '@/lib/excel';
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { toast } from 'react-hot-toast';
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { validateExcelFile, saveFileInfo, loadFileInfos, deleteFileInfo, ExcelFileInfo, readExcelFile, ExcelData } from '@/lib/excel';
 import SheetPreview from './SheetPreview';
 
-export default function FileUpload() {
+interface FileUploadProps {
+  onUploadComplete?: () => void;
+}
+
+export default function FileUpload({ onUploadComplete }: FileUploadProps) {
   const [files, setFiles] = useState<ExcelFileInfo[]>([]);
-  const [fileDataMap, setFileDataMap] = useState<Record<string, ExcelData>>({});
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [fileDataMap, setFileDataMap] = useState<Record<string, ExcelData>>({});
 
   // 저장된 파일 정보 로드
   useEffect(() => {
@@ -21,59 +26,41 @@ export default function FileUpload() {
   }, []);
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    setError(null);
+    try {
+      setIsLoading(true);
 
-    // 파일 개수 제한 확인
-    if (files.length + acceptedFiles.length > MAX_FILE_COUNT) {
-      setError(`최대 ${MAX_FILE_COUNT}개의 파일만 업로드할 수 있습니다.`);
-      return;
-    }
-
-    // 각 파일 처리
-    for (const file of acceptedFiles) {
-      try {
-        // 파일 형식 검증
-        if (!file.name.match(/\.(xlsx|xls|csv)$/i)) {
-          setError('엑셀 파일(.xlsx, .xls) 또는 CSV 파일만 업로드할 수 있습니다.');
+      for (const file of acceptedFiles) {
+        // 파일 유효성 검사
+        const error = validateExcelFile(file);
+        if (error) {
+          toast.error(error);
           continue;
         }
 
-        // 파일 크기 검증 (10MB)
-        if (file.size > 10 * 1024 * 1024) {
-          setError('파일 크기는 10MB를 초과할 수 없습니다.');
-          continue;
+        try {
+          const fileInfo = await saveFileInfo(file);
+          setFiles(prev => [...prev, fileInfo]);
+          
+          // 첫 번째 파일인 경우 선택
+          if (!selectedFileId) {
+            setSelectedFileId(fileInfo.id);
+          }
+          
+          toast.success(`${file.name} 파일이 업로드되었습니다.`);
+        } catch (error) {
+          console.error('File processing error:', error);
+          toast.error(`${file.name} 파일 처리 중 오류가 발생했습니다.`);
         }
-
-        // 엑셀 파일 읽기
-        const excelData = await readExcelFile(file);
-        const fileInfo: ExcelFileInfo = {
-          id: crypto.randomUUID(),
-          name: file.name,
-          size: file.size,
-          type: file.type,
-          lastModified: file.lastModified,
-          sheets: excelData.sheets.map(sheet => sheet.name),
-          recordCount: excelData.sheets.reduce((sum, sheet) => sum + sheet.totalRows, 0)
-        };
-
-        // 상태 업데이트
-        setFiles(prev => [...prev, fileInfo]);
-        setFileDataMap(prev => ({
-          ...prev,
-          [fileInfo.id]: excelData
-        }));
-        saveFileInfo(fileInfo);
-
-        // 첫 번째 파일인 경우 선택
-        if (!selectedFileId) {
-          setSelectedFileId(fileInfo.id);
-        }
-      } catch (error) {
-        console.error('파일 처리 중 오류:', error);
-        setError('파일을 처리하는 중 오류가 발생했습니다.');
       }
+
+      onUploadComplete?.();
+    } catch (error) {
+      console.error('Upload error:', error);
+      toast.error('파일 업로드 중 오류가 발생했습니다.');
+    } finally {
+      setIsLoading(false);
     }
-  }, [files, selectedFileId]);
+  }, [onUploadComplete, selectedFileId]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -101,39 +88,38 @@ export default function FileUpload() {
     }
   };
 
-  // 파일 선택
-  const handleFileSelect = (id: string) => {
-    setSelectedFileId(id);
-  };
-
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
+      {/* 드래그 앤 드롭 영역 */}
       <div
         {...getRootProps()}
-        className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors
-          ${isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-blue-500'}`}
+        className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors
+          ${isDragActive ? 'border-primary bg-primary/10' : 'border-gray-300 hover:border-primary'}
+          ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
       >
-        <input {...getInputProps()} />
-        <div className="space-y-2">
-          <p className="text-gray-600">
-            파일을 드래그하여 업로드하거나 클릭하여 선택하세요.
-          </p>
-          <p className="text-sm text-gray-500">
-            지원 형식: XLSX, XLS, CSV (최대 10MB)
-          </p>
-        </div>
+        <input {...getInputProps()} disabled={isLoading} />
+        {isLoading ? (
+          <p>파일 처리 중...</p>
+        ) : isDragActive ? (
+          <p>파일을 여기에 놓으세요...</p>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-gray-600">
+              파일을 드래그하여 업로드하거나 클릭하여 선택하세요.
+            </p>
+            <p className="text-sm text-gray-500">
+              지원 형식: XLSX, XLS, CSV (최대 10MB)
+            </p>
+          </div>
+        )}
       </div>
 
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-2 rounded">
-          {error}
-        </div>
-      )}
-
+      {/* 파일 목록과 미리보기 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* 좌측: 파일 목록 */}
         <div>
           <h3 className="text-lg font-semibold mb-4">업로드된 파일</h3>
-          <ScrollArea className="h-[400px]">
+          <ScrollArea className="h-[500px]">
             <div className="space-y-2 pr-4">
               {files.length === 0 ? (
                 <p className="text-center text-gray-500 py-4">
@@ -143,9 +129,9 @@ export default function FileUpload() {
                 files.map((file) => (
                   <div
                     key={file.id}
-                    className={`flex items-center justify-between p-4 bg-white border rounded-lg transition-colors
-                      ${selectedFileId === file.id ? 'border-blue-500 ring-1 ring-blue-500' : 'hover:border-blue-500'}`}
-                    onClick={() => handleFileSelect(file.id)}
+                    className={`flex items-center justify-between p-4 bg-white border rounded-lg cursor-pointer transition-colors
+                      ${selectedFileId === file.id ? 'border-primary ring-1 ring-primary' : 'hover:border-primary'}`}
+                    onClick={() => setSelectedFileId(file.id)}
                   >
                     <div className="flex-1 min-w-0">
                       <h4 className="font-medium text-gray-900 truncate">
@@ -181,11 +167,16 @@ export default function FileUpload() {
           </ScrollArea>
         </div>
 
+        {/* 우측: 시트 미리보기 */}
         <div>
-          {selectedFileId && fileDataMap[selectedFileId] ? (
-            <SheetPreview excelData={fileDataMap[selectedFileId]} />
+          {selectedFileId && files.find(f => f.id === selectedFileId) ? (
+            <SheetPreview
+              file={files.find(f => f.id === selectedFileId)!}
+              isSelected={true}
+              onSelect={() => {}}
+            />
           ) : (
-            <div className="bg-gray-50 border-2 border-dashed border-gray-300 rounded-lg p-8 text-center h-[400px] flex items-center justify-center">
+            <div className="bg-gray-50 border-2 border-dashed border-gray-300 rounded-lg p-8 text-center h-[500px] flex items-center justify-center">
               <p className="text-gray-500">
                 파일을 선택하면 시트 정보가 여기에 표시됩니다.
               </p>

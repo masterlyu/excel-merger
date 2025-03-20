@@ -20,6 +20,9 @@ const MAPPING_CONFIGS_KEY = 'excel_merger_mapping_configs';
 
 // 매핑 설정 저장
 export function saveMappingConfig(config: MappingConfig): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
   const configs = loadMappingConfigs();
   const existingIndex = configs.findIndex(c => c.id === config.id);
   
@@ -34,12 +37,18 @@ export function saveMappingConfig(config: MappingConfig): void {
 
 // 매핑 설정 불러오기
 export function loadMappingConfigs(): MappingConfig[] {
+  if (typeof window === 'undefined') {
+    return [];
+  }
   const configsJson = localStorage.getItem(MAPPING_CONFIGS_KEY);
   return configsJson ? JSON.parse(configsJson) : [];
 }
 
 // 매핑 설정 삭제
 export function deleteMappingConfig(id: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
   const configs = loadMappingConfigs();
   const filteredConfigs = configs.filter(config => config.id !== id);
   localStorage.setItem(MAPPING_CONFIGS_KEY, JSON.stringify(filteredConfigs));
