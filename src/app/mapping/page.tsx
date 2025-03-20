@@ -1,62 +1,205 @@
 "use client";
 
-import { useState } from 'react';
+import React from 'react';
 import MappingConfigManager from '@/components/mapping/MappingConfig';
-import { MappingConfig } from '@/lib/mapping';
+import { ColumnMapper } from '@/components/mapping/ColumnMapper';
+import { loadFileInfos, readExcelFile } from '@/lib/excel';
+import { loadMappingConfigs, saveMappingConfig, ColumnMapping, MappingConfig } from '@/lib/mapping';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 export default function MappingPage() {
-  const [selectedConfig, setSelectedConfig] = useState<MappingConfig | null>(null);
+  const [selectedConfig, setSelectedConfig] = React.useState<string | null>(null);
+  const [selectedSourceFile, setSelectedSourceFile] = React.useState<string | null>(null);
+  const [selectedSourceSheet, setSelectedSourceSheet] = React.useState<string | null>(null);
+  const [mappings, setMappings] = React.useState<ColumnMapping[]>([]);
+  const [sourceHeaders, setSourceHeaders] = React.useState<string[]>([]);
+  const [targetHeaders, setTargetHeaders] = React.useState<string[]>([]);
 
+  // 파일 정보 로드
+  const fileInfos = loadFileInfos();
+  const mappingConfigs = loadMappingConfigs();
+
+  // 선택된 파일의 시트 목록
+  const selectedFileSheets = React.useMemo(() => {
+    if (!selectedSourceFile) return [];
+    const fileInfo = fileInfos.find(info => info.id === selectedSourceFile);
+    return fileInfo?.sheets || [];
+  }, [selectedSourceFile, fileInfos]);
+
+  // 매핑 설정 선택 시
   const handleConfigSelect = (config: MappingConfig) => {
-    setSelectedConfig(config);
+    setSelectedConfig(config.id);
+    setMappings(config.mappings);
+    // TODO: 타겟 템플릿의 헤더 정보 설정
+    setTargetHeaders(['상품코드', '상품명', '수량', '단가', '금액']);
+  };
+
+  // 소스 파일 선택 시
+  const handleSourceFileSelect = async (fileId: string) => {
+    setSelectedSourceFile(fileId);
+    setSelectedSourceSheet(null);
+    setSourceHeaders([]);
+
+    const fileInfo = fileInfos.find(info => info.id === fileId);
+    if (!fileInfo) return;
+
+    try {
+      // Base64 데이터를 ArrayBuffer로 변환
+      const base64Data = fileInfo.data;
+      const binaryData = atob(base64Data.split(',')[1]);
+      const array = new Uint8Array(binaryData.length);
+      for (let i = 0; i < binaryData.length; i++) {
+        array[i] = binaryData.charCodeAt(i);
+      }
+
+      const file = new File([array], fileInfo.name, {
+        type: fileInfo.type,
+        lastModified: fileInfo.lastModified
+      });
+
+      const excelData = await readExcelFile(file);
+      const firstSheet = excelData.sheets[0];
+      if (firstSheet) {
+        setSelectedSourceSheet(firstSheet.name);
+        setSourceHeaders(firstSheet.headers);
+      }
+    } catch (error) {
+      console.error('Error loading source file:', error);
+      // TODO: 에러 처리
+    }
+  };
+
+  // 소스 시트 선택 시
+  const handleSourceSheetSelect = async (sheetName: string) => {
+    setSelectedSourceSheet(sheetName);
+    const fileInfo = fileInfos.find(info => info.id === selectedSourceFile);
+    if (!fileInfo) return;
+
+    try {
+      // Base64 데이터를 ArrayBuffer로 변환
+      const base64Data = fileInfo.data;
+      const binaryData = atob(base64Data.split(',')[1]);
+      const array = new Uint8Array(binaryData.length);
+      for (let i = 0; i < binaryData.length; i++) {
+        array[i] = binaryData.charCodeAt(i);
+      }
+
+      const file = new File([array], fileInfo.name, {
+        type: fileInfo.type,
+        lastModified: fileInfo.lastModified
+      });
+
+      const excelData = await readExcelFile(file);
+      const selectedSheet = excelData.sheets.find(sheet => sheet.name === sheetName);
+      if (selectedSheet) {
+        setSourceHeaders(selectedSheet.headers);
+      }
+    } catch (error) {
+      console.error('Error loading sheet:', error);
+      // TODO: 에러 처리
+    }
+  };
+
+  // 매핑 변경 시
+  const handleMappingChange = (newMappings: ColumnMapping[]) => {
+    setMappings(newMappings);
+    if (selectedConfig) {
+      const config = mappingConfigs.find(c => c.id === selectedConfig);
+      if (config) {
+        saveMappingConfig({
+          ...config,
+          mappings: newMappings
+        });
+      }
+    }
   };
 
   return (
-    <div className="container mx-auto py-8">
-      <div className="max-w-6xl mx-auto">
-        <div className="mb-8">
-          <h1 className="text-2xl font-bold mb-2">매핑 설정</h1>
-          <p className="text-gray-600">
-            엑셀 파일 간의 매핑 규칙을 설정하고 관리할 수 있습니다.
-            매핑 설정은 자동으로 저장되며, 나중에 다시 불러와 사용할 수 있습니다.
-          </p>
-        </div>
+    <div className="container mx-auto py-6 space-y-6">
+      <h1 className="text-2xl font-bold">매핑 설정</h1>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div>
-            <MappingConfigManager onSelect={handleConfigSelect} />
-          </div>
-          <div>
-            {selectedConfig ? (
-              <div className="bg-white rounded-lg shadow p-4">
-                <h2 className="text-lg font-semibold mb-4">
-                  {selectedConfig.name}
-                </h2>
-                {selectedConfig.description && (
-                  <p className="text-gray-600 mb-4">{selectedConfig.description}</p>
-                )}
-                <div className="text-sm text-gray-500">
-                  <p>생성일: {new Date(selectedConfig.createdAt).toLocaleString()}</p>
-                  <p>수정일: {new Date(selectedConfig.updatedAt).toLocaleString()}</p>
-                </div>
-                <div className="mt-4">
-                  <p className="text-sm text-gray-500">
-                    {selectedConfig.mappings.length > 0
-                      ? `${selectedConfig.mappings.length}개의 매핑 규칙이 설정되어 있습니다.`
-                      : '아직 설정된 매핑 규칙이 없습니다.'}
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <div className="bg-gray-50 border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
-                <p className="text-gray-500">
-                  매핑 설정을 선택하거나 새로 생성해주세요.
-                </p>
+      {/* 매핑 설정 관리 */}
+      <Card>
+        <CardHeader>
+          <CardTitle>매핑 설정 관리</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <MappingConfigManager onSelect={handleConfigSelect} />
+        </CardContent>
+      </Card>
+
+      {selectedConfig && (
+        <Card>
+          <CardHeader>
+            <CardTitle>소스 파일 선택</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* 소스 파일 선택 */}
+            <div>
+              <label className="block text-sm font-medium mb-2">파일 선택</label>
+              <Select
+                onValueChange={handleSourceFileSelect}
+                value={selectedSourceFile || undefined}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="파일을 선택하세요" />
+                </SelectTrigger>
+                <SelectContent>
+                  {fileInfos.map((file) => (
+                    <SelectItem key={file.id} value={file.id}>
+                      {file.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* 시트 선택 */}
+            {selectedSourceFile && (
+              <div>
+                <label className="block text-sm font-medium mb-2">시트 선택</label>
+                <Select
+                  onValueChange={handleSourceSheetSelect}
+                  value={selectedSourceSheet || undefined}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="시트를 선택하세요" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {selectedFileSheets.map((sheet) => (
+                      <SelectItem key={sheet} value={sheet}>
+                        {sheet}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             )}
-          </div>
-        </div>
-      </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* 컬럼 매핑 */}
+      {selectedConfig && selectedSourceFile && selectedSourceSheet && (
+        <Card>
+          <CardHeader>
+            <CardTitle>컬럼 매핑</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ScrollArea className="h-[500px]">
+              <ColumnMapper
+                sourceHeaders={sourceHeaders}
+                targetHeaders={targetHeaders}
+                currentMappings={mappings}
+                onMappingChange={handleMappingChange}
+                sourceSheet={selectedSourceSheet}
+              />
+            </ScrollArea>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 } 

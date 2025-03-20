@@ -42,17 +42,13 @@ export interface ExcelFileInfo {
   lastModified: number;
   sheets: string[];
   recordCount: number;
+  data: string;  // Base64 문자열로 변경
 }
 
 interface SheetAnalysis {
   headerRow: number;
   dataStartRow: number;
   title?: string;
-  sections?: {
-    title: string;
-    startRow: number;
-    endRow: number;
-  }[];
 }
 
 // 시트 구조 분석
@@ -172,32 +168,24 @@ function extractHeaders(worksheet: XLSX.WorkSheet, headerRow: number): string[] 
 function extractData(
   worksheet: XLSX.WorkSheet,
   dataStartRow: number,
-  headers: string[],
-  analysis: SheetAnalysis
+  headers: string[]
 ): Record<string, string | number | null>[] {
   const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
   const data: Record<string, string | number | null>[] = [];
-
-  // 데이터 섹션이 정의되어 있는 경우
-  if (analysis.sections && analysis.sections.length > 0) {
-    const dataSection = analysis.sections.find(section => 
-      section.startRow <= dataStartRow && section.endRow >= dataStartRow
-    );
-    
-    if (dataSection) {
-      range.e.r = dataSection.endRow;
-    }
-  }
+  let consecutiveEmptyRows = 0;
+  const MAX_EMPTY_ROWS = 2; // 연속된 빈 행이 2개 이상이면 데이터 영역 종료로 간주
 
   for (let row = dataStartRow; row <= range.e.r; row++) {
     const rowData: Record<string, string | number | null> = {};
     let hasData = false;
+    let emptyColumns = 0;
 
+    // 현재 행의 데이터 읽기
     for (let col = 0; col < headers.length; col++) {
       const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
       const cell = worksheet[cellAddress];
       
-      if (cell) {
+      if (cell && cell.v !== undefined && cell.v !== '') {
         // 날짜 형식 처리
         if (cell.t === 'd') {
           rowData[headers[col]] = cell.w || cell.v;
@@ -207,11 +195,23 @@ function extractData(
         hasData = true;
       } else {
         rowData[headers[col]] = null;
+        emptyColumns++;
       }
     }
 
-    // 빈 행이 아닌 경우만 추가
+    // 대부분의 열이 비어있는 경우 빈 행으로 간주
+    if (emptyColumns >= headers.length * 0.8) {
+      consecutiveEmptyRows++;
+      if (consecutiveEmptyRows >= MAX_EMPTY_ROWS) {
+        // 연속된 빈 행을 만나면 데이터 영역이 끝난 것으로 간주하고 종료
+        break;
+      }
+      continue;
+    }
+
+    // 데이터가 있는 행을 만나면 연속된 빈 행 카운터 초기화
     if (hasData) {
+      consecutiveEmptyRows = 0;
       data.push(rowData);
     }
   }
@@ -249,7 +249,7 @@ export async function readExcelFile(file: File): Promise<ExcelData> {
           const worksheet = workbook.Sheets[name];
           const analysis = analyzeSheetStructure(worksheet);
           const headers = extractHeaders(worksheet, analysis.headerRow);
-          const sheetData = extractData(worksheet, analysis.dataStartRow, headers, analysis);
+          const sheetData = extractData(worksheet, analysis.dataStartRow, headers);
 
           return {
             name,
@@ -282,17 +282,58 @@ export async function readExcelFile(file: File): Promise<ExcelData> {
 }
 
 // 로컬 스토리지에 파일 정보 저장
-export function saveFileInfo(fileInfo: ExcelFileInfo): void {
-  const fileInfos = loadFileInfos();
-  const existingIndex = fileInfos.findIndex(info => info.id === fileInfo.id);
-  
-  if (existingIndex >= 0) {
-    fileInfos[existingIndex] = fileInfo;
-  } else {
-    fileInfos.push(fileInfo);
-  }
-  
-  localStorage.setItem('excel_merger_files', JSON.stringify(fileInfos));
+export async function saveFileInfo(file: File): Promise<ExcelFileInfo> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    
+    reader.onload = async (e) => {
+      try {
+        const base64Data = e.target?.result as string;
+        const binaryData = atob(base64Data.split(',')[1]);
+        const array = new Uint8Array(binaryData.length);
+        for (let i = 0; i < binaryData.length; i++) {
+          array[i] = binaryData.charCodeAt(i);
+        }
+        
+        const workbook = XLSX.read(array, { type: 'array' });
+        
+        const fileInfo: ExcelFileInfo = {
+          id: crypto.randomUUID(),
+          name: file.name,
+          size: file.size,
+          type: file.type,
+          lastModified: file.lastModified,
+          sheets: workbook.SheetNames,
+          recordCount: workbook.SheetNames.reduce((total, name) => {
+            const worksheet = workbook.Sheets[name];
+            const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+            return total + (range.e.r - range.s.r);
+          }, 0),
+          data: base64Data
+        };
+
+        const fileInfos = loadFileInfos();
+        const existingIndex = fileInfos.findIndex(info => info.id === fileInfo.id);
+        
+        if (existingIndex >= 0) {
+          fileInfos[existingIndex] = fileInfo;
+        } else {
+          fileInfos.push(fileInfo);
+        }
+        
+        localStorage.setItem('excel_merger_files', JSON.stringify(fileInfos));
+        resolve(fileInfo);
+      } catch (error) {
+        reject(error);
+      }
+    };
+
+    reader.onerror = () => {
+      reject(new Error('파일을 읽는 중 오류가 발생했습니다.'));
+    };
+
+    reader.readAsDataURL(file);
+  });
 }
 
 // 로컬 스토리지에서 파일 정보 불러오기
