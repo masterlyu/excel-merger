@@ -82,14 +82,22 @@ export default function MappingConfigManager({ onSelect }: MappingConfigManagerP
   };
   
   // 매핑 설정 선택
-  const handleSelectMapping = (id: string) => {
+  const handleSelectMapping = (id: string, e?: React.MouseEvent) => {
+    e?.stopPropagation(); // 이벤트 전파 중지
+    console.log(`매핑 ID ${id} 선택됨`);
+    
+    // 이미 선택된 매핑을 다시 클릭한 경우 선택 해제
+    if (activeMappingId === id) {
+      setActiveMappingId(null);
+      localStorage.removeItem('excel_merger_active_mapping_config');
+      if (onSelect) onSelect('');
+      return;
+    }
+    
+    // 새로운 매핑 선택
     setActiveMappingId(id);
     setActiveMappingConfigId(id);
-    
-    // 콜백 호출
-    if (onSelect) {
-      onSelect(id);
-    }
+    if (onSelect) onSelect(id);
   };
   
   // 편집 다이얼로그 열기
@@ -162,7 +170,7 @@ export default function MappingConfigManager({ onSelect }: MappingConfigManagerP
                 <TableRow 
                   key={config.id} 
                   className={activeMappingId === config.id ? 'bg-muted/50' : ''}
-                  onClick={() => handleSelectMapping(config.id)}
+                  onClick={(e) => handleSelectMapping(config.id, e)}
                   style={{ cursor: 'pointer' }}
                 >
                   <TableCell className="font-medium">{config.name}</TableCell>
@@ -170,7 +178,7 @@ export default function MappingConfigManager({ onSelect }: MappingConfigManagerP
                   <TableCell>{config.fieldMaps?.length || 0}</TableCell>
                   <TableCell>{new Date(config.created).toLocaleDateString()}</TableCell>
                   <TableCell className="text-right">
-                    <div className="flex justify-end space-x-2">
+                    <div className="flex justify-end space-x-2" onClick={(e) => e.stopPropagation()}>
                       <MappingConfigDialog config={config} onComplete={handleCreateComplete}>
                         <Button
                           variant="ghost" 

@@ -38,101 +38,25 @@ import {
 } from '@/lib/mapping';
 import { 
   loadFileInfos, 
-  ExcelFileInfo 
+  ExcelFileInfo,
+  getSheetData,
+  SheetData
 } from '@/lib/excel';
-import { getSheetData } from '@/lib/excel';
 import { Wand2, ArrowRight, RefreshCw } from "lucide-react";
+import { useFileStore } from '@/store/files';
+import { combinedSimilarity, normalizeFieldName, findOptimalFieldMappings } from '@/lib/similarity';
+import { toast } from 'react-hot-toast';
+import MappingPreview from './MappingPreview';
 
 // 필드 매퍼 컴포넌트 속성
 interface FieldMapperProps {
   onMappingComplete?: () => void;
 }
 
-// 문자열 유사도 측정 함수 (레벤슈타인 거리 기반)
-function stringSimilarity(str1: string, str2: string): number {
-  const track = Array(str2.length + 1).fill(null).map(() => 
-    Array(str1.length + 1).fill(null));
-  
-  for (let i = 0; i <= str1.length; i += 1) {
-    track[0][i] = i;
-  }
-  
-  for (let j = 0; j <= str2.length; j += 1) {
-    track[j][0] = j;
-  }
-  
-  for (let j = 1; j <= str2.length; j += 1) {
-    for (let i = 1; i <= str1.length; i += 1) {
-      const indicator = str1[i - 1] === str2[j - 1] ? 0 : 1;
-      track[j][i] = Math.min(
-        track[j][i - 1] + 1, // 삭제
-        track[j - 1][i] + 1, // 삽입
-        track[j - 1][i - 1] + indicator, // 대체
-      );
-    }
-  }
-  
-  // 정규화된 유사도 (0~1 사이 값, 1이 가장 유사)
-  const maxLen = Math.max(str1.length, str2.length);
-  if (maxLen === 0) return 1; // 두 문자열이 모두 빈 문자열인 경우
-  return 1 - track[str2.length][str1.length] / maxLen;
-}
-
-// 정규화된 필드명 반환 (소문자 변환, 공백 제거 등)
-function normalizeFieldName(fieldName: string): string {
-  return fieldName.toLowerCase()
-    .replace(/[_\s-]+/g, '') // 언더스코어, 공백, 하이픈 제거
-    .replace(/[^\w\s가-힣]/g, ''); // 한글, 영문, 숫자만 유지
-}
-
-// 유사한 필드 매칭 (최소 유사도 임계값 기준)
-function findSimilarFields(sourceFields: string[], targetFields: string[], threshold: number = 0.7): Map<string, string> {
-  const mappings = new Map<string, string>();
-  const usedTargets = new Set<string>();
-  
-  // 1. 정확히 일치하는 필드 먼저 매핑
-  sourceFields.forEach(source => {
-    const normalized = normalizeFieldName(source);
-    
-    for (const target of targetFields) {
-      if (usedTargets.has(target)) continue;
-      
-      if (normalizeFieldName(target) === normalized) {
-        mappings.set(source, target);
-        usedTargets.add(target);
-        break;
-      }
-    }
-  });
-  
-  // 2. 유사도 기반 매핑 (임계값 이상만)
-  sourceFields.forEach(source => {
-    if (mappings.has(source)) return; // 이미 매핑된 경우 스킵
-    
-    let bestMatch = '';
-    let highestSimilarity = 0;
-    
-    for (const target of targetFields) {
-      if (usedTargets.has(target)) continue;
-      
-      const similarity = stringSimilarity(
-        normalizeFieldName(source), 
-        normalizeFieldName(target)
-      );
-      
-      if (similarity > highestSimilarity && similarity >= threshold) {
-        highestSimilarity = similarity;
-        bestMatch = target;
-      }
-    }
-    
-    if (bestMatch) {
-      mappings.set(source, bestMatch);
-      usedTargets.add(bestMatch);
-    }
-  });
-  
-  return mappings;
+// 유사 필드명 찾기 함수 (현재 수정)
+function findSimilarFields(sourceFields: string[], targetFields: string[], threshold = 0.7): Map<string, string> {
+  console.log('유사 필드 찾기 시작:', { sourceFields, targetFields, threshold });
+  return findOptimalFieldMappings(sourceFields, targetFields, threshold);
 }
 
 // 시트 인터페이스 정의
@@ -141,6 +65,7 @@ interface Sheet {
   [key: string]: any;
 }
 
+// FieldMapper 컴포넌트 정의
 export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
   // 상태 관리
   const [files, setFiles] = useState<ExcelFileInfo[]>([]);
@@ -150,8 +75,11 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
   const [selectedSheet, setSelectedSheet] = useState<string>("");
   const [sourceFields, setSourceFields] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [sheetRecords, setSheetRecords] = useState<any[]>([]);
+  const [sheetRecords, setSheetRecords] = useState<Record<string, any>[]>([]);
   
+  // 매핑 설정 관련 상태
+  const [configs, setConfigs] = useState<MappingConfig[]>([]);
+
   // 매핑 설정 & 파일 로드
   useEffect(() => {
     // 매핑 설정 로드
@@ -236,46 +164,30 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
         return;
       }
       
-      console.log('시트 데이터 로드 시작 - 파일ID:', selectedFileId, '시트명:', selectedSheet);
-      
       try {
         setIsLoading(true);
-        
-        // 선택한 파일 정보 확인
-        const selectedFile = files.find(f => f.id === selectedFileId);
-        console.log('선택한 파일 정보:', selectedFile ? {
-          id: selectedFile.id,
-          name: selectedFile.name,
-          sheets: selectedFile.sheets,
-          dataSize: selectedFile.data ? selectedFile.data.length : 0
-        } : '없음');
+        console.log('시트 데이터 로드 시작:', selectedFileId, selectedSheet);
         
         const sheetData = await getSheetData(selectedFileId, selectedSheet);
-        console.log('로드된 시트 데이터:', sheetData ? {
-          name: sheetData.name,
-          headers: sheetData.headers,
-          dataCount: sheetData.data?.length || sheetData.rows?.length || 0
-        } : '없음');
         
-        if (sheetData && sheetData.headers) {
-          setSourceFields(sheetData.headers);
-          console.log('소스 필드 설정:', sheetData.headers);
+        if (sheetData) {
+          console.log('시트 데이터 로드 성공:', sheetData);
           
-          // 레코드 데이터 설정
-          if (sheetData.data) {
-            // data 속성이 있는 경우
-            setSheetRecords(sheetData.data);
-            console.log('레코드 데이터 설정(data):', sheetData.data.length, '개');
-          } else if (sheetData.rows) {
-            // rows 속성이 있는 경우
-            setSheetRecords(sheetData.rows);
-            console.log('레코드 데이터 설정(rows):', sheetData.rows.length, '개');
+          if (sheetData.headers && sheetData.headers.length > 0) {
+            setSourceFields(sheetData.headers);
           } else {
-            console.log('레코드 데이터가 없음');
+            console.warn('시트에 헤더가 없습니다.');
+            setSourceFields([]);
+          }
+          
+          if (sheetData.data && sheetData.data.length > 0) {
+            setSheetRecords(sheetData.data);
+          } else {
+            console.warn('시트에 데이터가 없습니다.');
             setSheetRecords([]);
           }
         } else {
-          console.error('시트 데이터 또는 헤더 없음:', sheetData);
+          console.error('시트 데이터를 찾을 수 없습니다.');
           setSourceFields([]);
           setSheetRecords([]);
         }
@@ -294,7 +206,7 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
   // 자동 매핑 실행
   const handleAutoMapping = async () => {
     if (!activeMappingConfig || !selectedFileId || !selectedSheet) {
-      alert('매핑 설정, 파일, 시트를 먼저 선택해주세요.');
+      toast.error('매핑 설정, 파일, 시트를 먼저 선택해주세요.');
       return;
     }
     
@@ -304,7 +216,7 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
       // 타겟 필드 목록 (매핑 설정의 타겟 필드명)
       const targetFields = activeMappingConfig.fieldMaps?.map(map => map.targetField.name) || [];
       if (!targetFields.length) {
-        alert('매핑 설정에 타겟 필드가 없습니다.');
+        toast.error('매핑 설정에 타겟 필드가 없습니다.');
         setIsLoading(false);
         return;
       }
@@ -319,80 +231,189 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
           if (sheetData && sheetData.headers && sheetData.headers.length > 0) {
             setSourceFields(sheetData.headers);
           } else {
-            alert('소스 파일의 필드를 찾을 수 없습니다. 파일을 다시 확인해주세요.');
+            toast.error('소스 파일의 필드를 찾을 수 없습니다. 파일을 다시 확인해주세요.');
             setIsLoading(false);
             return;
           }
         } catch (error) {
           console.error("시트 데이터 로드 오류:", error);
-          alert('소스 파일 데이터를 로드하는 중 오류가 발생했습니다.');
+          toast.error('소스 파일 데이터를 로드하는 중 오류가 발생했습니다.');
           setIsLoading(false);
           return;
         }
       }
       
-      // 유사도 기반 자동 매핑
-      const mappings = findSimilarFields(sourceFields, targetFields);
+      // 유사도 기반 자동 매핑 (임계값 0.6으로 설정)
+      const mappings = findSimilarFields(sourceFields, targetFields, 0.6);
       console.log('생성된 매핑:', mappings);
       
       if (mappings.size === 0) {
-        alert('유사한 필드를 찾을 수 없습니다.');
+        toast.error('유사한 필드를 찾을 수 없습니다.');
         setIsLoading(false);
         return;
       }
       
-      // 매핑 적용
-      let updatedConfig = {...activeMappingConfig};
+      // 현재 매핑 설정 복제
+      const updatedConfig = { ...activeMappingConfig };
+      let mappingCount = 0;
       
-      // 기존 매핑 정보는 보존
+      // 매핑 적용
       for (const [sourceField, targetField] of mappings.entries()) {
-        // 중복 매핑 방지를 위해 이미 매핑된 필드인지 확인
-        const existingMapping = updatedConfig.fieldMaps?.find(map => 
-          map.targetField.name === targetField && 
-          map.sourceFields.some(sf => 
-            sf.fileId === selectedFileId && 
-            sf.sheetName === selectedSheet && 
-            sf.fieldName === sourceField
-          )
+        // 해당 타겟 필드에 대한 필드맵 찾기
+        const fieldMapIndex = updatedConfig.fieldMaps.findIndex(
+          fieldMap => fieldMap.targetField.name === targetField
         );
         
-        if (!existingMapping) {
-          console.log('매핑 추가:', sourceField, '->', targetField);
-          updatedConfig = addFieldMap(
-            updatedConfig.id,
-            targetField,
-            {
-              fileId: selectedFileId,
-              sheetName: selectedSheet,
-              fieldName: sourceField
-            }
-          ) || updatedConfig;
+        if (fieldMapIndex !== -1) {
+          // 이미 매핑이 있는 경우, 소스 필드 추가
+          const sourceFieldObj = {
+            id: `${selectedFileId}_${selectedSheet}_${sourceField}`,
+            fileId: selectedFileId,
+            sheetName: selectedSheet,
+            fieldName: sourceField
+          };
+          
+          // 이미 동일한 소스 필드가 있는지 확인
+          const hasSourceField = updatedConfig.fieldMaps[fieldMapIndex].sourceFields.some(
+            sf => sf.fileId === selectedFileId && sf.sheetName === selectedSheet && sf.fieldName === sourceField
+          );
+          
+          if (!hasSourceField) {
+            updatedConfig.fieldMaps[fieldMapIndex].sourceFields.push(sourceFieldObj);
+            mappingCount++;
+          }
         }
       }
       
-      setActiveMappingConfig(updatedConfig);
-      alert(`자동 매핑 완료: ${mappings.size}개 필드가 매핑되었습니다.`);
+      // 매핑 설정 업데이트
+      if (mappingCount > 0) {
+        updatedConfig.updated = Date.now();
+        
+        // 전역 상태에 매핑 설정 업데이트
+        setConfigs((prevConfigs: MappingConfig[]) => 
+          prevConfigs.map((config: MappingConfig) => 
+            config.id === updatedConfig.id ? updatedConfig : config
+          )
+        );
+        
+        // 매핑 설정 저장
+        const updatedConfigs = loadMappingConfigs().map(config => 
+          config.id === updatedConfig.id ? updatedConfig : config
+        );
+        localStorage.setItem('excel_merger_mappings', JSON.stringify(updatedConfigs));
+        
+        toast.success(`자동 매핑 완료: ${mappingCount}개 필드가 매핑되었습니다.`);
+      } else {
+        toast.error('이미 모든 가능한 필드가 매핑되어 있습니다.');
+      }
     } catch (error) {
       console.error("자동 매핑 오류:", error);
-      alert('자동 매핑 중 오류가 발생했습니다.');
+      toast.error('자동 매핑 중 오류가 발생했습니다.');
     } finally {
       setIsLoading(false);
     }
   };
   
-  // 매핑 삭제 처리
-  const handleRemoveSourceField = (targetField: string, fileId: string, sheetName: string, fieldName: string) => {
+  // 필드 매핑 추가/삭제 이벤트 핸들러 개선
+  const handleAddSourceField = (targetFieldId: string, sourceField: SourceField) => {
+    if (!activeMappingConfig) return;
+
+    try {
+      console.log(`소스 필드 추가: ${JSON.stringify(sourceField)}`);
+      
+      // 이미 연결된 소스 필드인지 확인
+      const fieldMap = activeMappingConfig.fieldMaps.find(
+        map => map.targetField.name === targetFieldId
+      );
+      
+      if (!fieldMap) {
+        console.error(`타겟 필드를 찾을 수 없음: ${targetFieldId}`);
+        return;
+      }
+      
+      // 이미 존재하는 매핑인지 확인
+      const alreadyMapped = fieldMap.sourceFields.some(
+        sf => sf.fileId === sourceField.fileId && 
+             sf.sheetName === sourceField.sheetName && 
+             sf.fieldName === sourceField.fieldName
+      );
+      
+      if (alreadyMapped) {
+        toast.error('이미 매핑된 필드입니다.');
+        return;
+      }
+      
+      // 소스 필드 추가
+      const updatedConfig = { ...activeMappingConfig };
+      const mapIndex = updatedConfig.fieldMaps.findIndex(
+        map => map.targetField.name === targetFieldId
+      );
+      
+      if (mapIndex !== -1) {
+        // 고유 ID 생성
+        const sourceFieldWithId = {
+          ...sourceField,
+          id: `${sourceField.fileId}_${sourceField.sheetName}_${sourceField.fieldName}`
+        };
+        
+        updatedConfig.fieldMaps[mapIndex].sourceFields.push(sourceFieldWithId);
+        updatedConfig.updated = Date.now();
+        
+        // 상태 업데이트
+        setActiveMappingConfig(updatedConfig);
+        
+        // 로컬 스토리지 업데이트
+        const configs = loadMappingConfigs().map(config => 
+          config.id === updatedConfig.id ? updatedConfig : config
+        );
+        localStorage.setItem('excel_merger_mappings', JSON.stringify(configs));
+        
+        toast.success('필드가 성공적으로 매핑되었습니다.');
+      }
+    } catch (error) {
+      console.error('필드 매핑 추가 오류:', error);
+      toast.error('필드 매핑 추가 중 오류가 발생했습니다.');
+    }
+  };
+
+  const handleRemoveSourceField = (targetFieldId: string, sourceFieldIndex: number) => {
     if (!activeMappingConfig) return;
     
-    const updatedConfig = removeSourceField(
-      activeMappingConfig.id,
-      targetField,
-      fileId,
-      fieldName
-    );
-    
-    if (updatedConfig) {
+    try {
+      // 해당 타겟 필드 찾기
+      const updatedConfig = { ...activeMappingConfig };
+      const mapIndex = updatedConfig.fieldMaps.findIndex(
+        map => map.targetField.name === targetFieldId
+      );
+      
+      if (mapIndex === -1) {
+        console.error(`타겟 필드를 찾을 수 없음: ${targetFieldId}`);
+        return;
+      }
+      
+      // 소스 필드가 범위를 벗어나는지 확인
+      if (sourceFieldIndex < 0 || sourceFieldIndex >= updatedConfig.fieldMaps[mapIndex].sourceFields.length) {
+        console.error(`유효하지 않은 소스 필드 인덱스: ${sourceFieldIndex}`);
+        return;
+      }
+      
+      // 매핑 제거
+      updatedConfig.fieldMaps[mapIndex].sourceFields.splice(sourceFieldIndex, 1);
+      updatedConfig.updated = Date.now();
+      
+      // 상태 업데이트
       setActiveMappingConfig(updatedConfig);
+      
+      // 로컬 스토리지 업데이트
+      const configs = loadMappingConfigs().map(config => 
+        config.id === updatedConfig.id ? updatedConfig : config
+      );
+      localStorage.setItem('excel_merger_mappings', JSON.stringify(configs));
+      
+      toast.success('필드 매핑이 제거되었습니다.');
+    } catch (error) {
+      console.error('필드 매핑 제거 오류:', error);
+      toast.error('필드 매핑 제거 중 오류가 발생했습니다.');
     }
   };
 
@@ -567,9 +588,7 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
                           className="h-8 w-8 p-0 text-destructive"
                           onClick={() => handleRemoveSourceField(
                             fieldMap.targetField.name,
-                            sourceField.fileId,
-                            sourceField.sheetName,
-                            sourceField.fieldName
+                            index
                           )}
                         >
                           ×

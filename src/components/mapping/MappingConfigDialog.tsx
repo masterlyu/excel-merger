@@ -78,9 +78,9 @@ export function MappingConfigDialog({
   // 폼 제출 처리
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     
     if (!name.trim()) {
-      alert("매핑 구성 이름을 입력해주세요.");
       return;
     }
 
@@ -90,154 +90,163 @@ export function MappingConfigDialog({
     }
 
     if (config) {
-      // 기존 매핑 업데이트 (기존 매핑 유지하면서 메타데이터만 업데이트)
-      console.log("매핑 설정 업데이트:", { ...config, name, description, targetFields });
-      
-      // 기존 필드맵 유지하면서 새로운 필드 추가
-      const existingTargetNames = config.fieldMaps?.map(map => map.targetField.name) || [];
-      const newTargetFields = targetFields.filter(field => !existingTargetNames.includes(field));
-      
-      // 새로운 필드맵 생성
-      const newFieldMaps = [
-        ...(config.fieldMaps || []),
-        ...newTargetFields.map(fieldName => ({
-          id: `field_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
-          sourceFields: [], // 빈 배열로 초기화
-          targetField: {
-            name: fieldName,
-            description: "",
-            type: "string"
-          }
-        }))
-      ];
-      
-      // 삭제된 필드 제거
-      const filteredFieldMaps = newFieldMaps.filter(map => 
-        targetFields.includes(map.targetField.name)
-      );
-      
-      saveMappingConfig({
+      // 기존 매핑 업데이트
+      const updatedConfig = {
         ...config,
         name,
         description,
         updated: Date.now(),
-        fieldMaps: filteredFieldMaps,
-      });
-      console.log("매핑 설정이 업데이트 되었습니다:", name);
-    } else {
-      // 새로운 매핑 생성
-      const newConfig = createMappingConfig(name, description);
+      };
       
-      // 타겟 필드 추가
-      const fieldMaps = targetFields.map(fieldName => ({
-        id: `field_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
-        sourceFields: [], // 빈 배열로 초기화
-        targetField: {
+      // 타겟 필드 처리
+      const currentFieldNames = config.fieldMaps?.map(map => map.targetField.name) || [];
+      const newTargetFields = targetFields.filter(field => !currentFieldNames.includes(field));
+      
+      // 새 타겟 필드 추가
+      newTargetFields.forEach(fieldName => {
+        const newTargetField = {
           name: fieldName,
-          description: "",
-          type: "string"
+          description: '',
+          type: 'string'
+        };
+        
+        if (!updatedConfig.fieldMaps) {
+          updatedConfig.fieldMaps = [];
         }
-      }));
+        
+        updatedConfig.fieldMaps.push({
+          id: `field_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+          targetField: newTargetField,
+          sourceFields: []
+        });
+      });
       
-      newConfig.fieldMaps = fieldMaps;
-      saveMappingConfig(newConfig);
-      onComplete?.();
-      console.log("새 매핑 설정이 생성되었습니다:", name);
+      // 제거된 타겟 필드 처리
+      if (updatedConfig.fieldMaps) {
+        updatedConfig.fieldMaps = updatedConfig.fieldMaps.filter(
+          map => targetFields.includes(map.targetField.name)
+        );
+      }
+      
+      saveMappingConfig(updatedConfig);
+    } else {
+      // 새 매핑 생성
+      createMappingConfig(name, description, targetFields);
     }
     
     setOpen(false);
+    if (onComplete) {
+      onComplete();
+    }
   };
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        {children || (
-          <Button variant="outline" size="sm" className="gap-1">
-            <Plus className="h-4 w-4" />
-            새 매핑 구성
-          </Button>
-        )}
-      </DialogTrigger>
-      <DialogContent className="sm:max-w-[500px]">
+      {children && <DialogTrigger asChild>{children}</DialogTrigger>}
+      <DialogContent 
+        className="sm:max-w-[500px]" 
+        onClick={(e) => e.stopPropagation()}
+      >
         <DialogHeader>
           <DialogTitle>
-            {config ? "매핑 설정 편집" : "새 매핑 설정 만들기"}
+            {config ? "매핑 설정 수정" : "새 매핑 설정 생성"}
           </DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="name">매핑 이름</Label>
-            <Input
-              id="name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="매핑 이름을 입력하세요"
-              required
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="description">설명 (선택사항)</Label>
-            <Textarea
-              id="description"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="매핑에 대한 설명을 입력하세요"
-              rows={3}
-            />
-          </div>
-          
-          {/* 타겟 필드 추가 섹션 */}
-          <div className="space-y-2">
-            <Label htmlFor="targetFields">타겟 필드 (레코드)</Label>
-            <div className="flex space-x-2">
+        <form onSubmit={handleSubmit}>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="name">매핑 이름</Label>
               <Input
-                id="targetFields"
-                value={newField}
-                onChange={(e) => setNewField(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="필드 이름 입력"
-                className="flex-1"
+                id="name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                placeholder="매핑 설정 이름을 입력하세요"
+                required
               />
-              <Button 
-                type="button" 
-                variant="outline" 
-                size="sm"
-                onClick={addField}
-              >
-                <Plus className="h-4 w-4 mr-1" />
-                추가
-              </Button>
             </div>
             
-            {/* 타겟 필드 목록 */}
-            {targetFields.length > 0 ? (
-              <div className="border rounded-md p-2 mt-2 space-y-2 max-h-[200px] overflow-y-auto">
-                {targetFields.map((field, index) => (
-                  <div key={index} className="flex items-center justify-between bg-muted p-2 rounded-sm">
-                    <span>{field}</span>
-                    <Button 
-                      type="button" 
-                      variant="ghost" 
-                      size="sm"
-                      onClick={() => removeField(index)}
-                    >
-                      <Trash2 className="h-4 w-4 text-destructive" />
-                    </Button>
-                  </div>
-                ))}
+            <div className="grid gap-2">
+              <Label htmlFor="description">설명 (선택사항)</Label>
+              <Textarea
+                id="description"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                placeholder="이 매핑 설정에 대한 설명을 입력하세요"
+                className="resize-none"
+              />
+            </div>
+            
+            <div className="grid gap-2">
+              <Label>타겟 필드</Label>
+              <div className="flex gap-2">
+                <Input
+                  value={newField}
+                  onChange={(e) => setNewField(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  onClick={(e) => e.stopPropagation()}
+                  placeholder="추가할 필드 이름"
+                />
+                <Button 
+                  type="button" 
+                  variant="secondary"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    addField();
+                  }}
+                >
+                  <Plus className="h-4 w-4 mr-1" />
+                  추가
+                </Button>
               </div>
-            ) : (
-              <p className="text-sm text-muted-foreground p-2">아직 타겟 필드가 없습니다. 필드를 추가해주세요.</p>
-            )}
+              
+              {targetFields.length > 0 ? (
+                <div className="border rounded-md p-2 mt-2 space-y-2">
+                  {targetFields.map((field, index) => (
+                    <div 
+                      key={index} 
+                      className="flex justify-between items-center px-3 py-1 bg-muted rounded-sm"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <span>{field}</span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeField(index);
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm text-muted-foreground mt-2">
+                  타겟 필드가 없습니다. 매핑에 포함할 필드를 추가하세요.
+                </div>
+              )}
+            </div>
           </div>
           
-          <div className="flex justify-end space-x-2 pt-4">
-            <DialogClose asChild>
-              <Button type="button" variant="outline">
-                취소
-              </Button>
-            </DialogClose>
-            <Button type="submit">
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+              }}
+            >
+              취소
+            </Button>
+            <Button 
+              type="submit"
+              onClick={(e) => e.stopPropagation()}
+            >
               {config ? "저장" : "생성"}
             </Button>
           </div>

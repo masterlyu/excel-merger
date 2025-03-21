@@ -8,17 +8,21 @@ export interface MappingConfig {
   fieldMaps: FieldMap[];
 }
 
+/**
+ * 필드 매핑 관련 타입
+ */
 export interface FieldMap {
   id: string;
-  sourceFields: SourceField[];
   targetField: {
     name: string;
     description: string;
     type: string;
   };
+  sourceFields: SourceField[];
 }
 
 export interface SourceField {
+  id?: string;  // 고유 ID (옵션)
   fileId: string;
   sheetName: string;
   fieldName: string;
@@ -31,16 +35,47 @@ const ACTIVE_MAPPING_CONFIG_KEY = 'excel_merger_active_mapping_config';
 /**
  * 새 매핑 설정 생성
  */
-export function createMappingConfig(name: string, description?: string): MappingConfig {
+export function createMappingConfig(
+  name: string, 
+  description?: string,
+  targetFields?: string[]
+): MappingConfig {
   const now = Date.now();
-  return {
+  const fieldMaps: FieldMap[] = [];
+  
+  // 타겟 필드가 제공된 경우 필드맵 생성
+  if (targetFields && targetFields.length > 0) {
+    targetFields.forEach(fieldName => {
+      fieldMaps.push({
+        id: `field_${now}_${Math.random().toString(36).substring(2, 9)}`,
+        targetField: {
+          name: fieldName,
+          description: '',
+          type: 'string'
+        },
+        sourceFields: []
+      });
+    });
+  }
+  
+  const newConfig = {
     id: `mapping_${now}`,
     name,
     description: description || '',
     created: now,
     updated: now,
-    fieldMaps: [],
+    fieldMaps
   };
+  
+  // 로컬 스토리지에 저장
+  const configs = loadMappingConfigs();
+  configs.push(newConfig);
+  localStorage.setItem(MAPPING_CONFIGS_KEY, JSON.stringify(configs));
+  
+  // 활성 매핑 설정으로 설정
+  setActiveMappingConfigId(newConfig.id);
+  
+  return newConfig;
 }
 
 /**
