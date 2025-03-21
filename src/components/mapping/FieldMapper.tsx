@@ -25,6 +25,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Wand2, ArrowRight, RefreshCw, PlusCircle } from "lucide-react";
+import { toast } from 'react-hot-toast';
+import { combinedSimilarity, normalizeFieldName, findOptimalFieldMappings } from '@/lib/similarity';
+
+// 매핑 관련 타입 및 함수
 import { 
   MappingConfig, 
   loadMappingConfigs, 
@@ -34,38 +39,35 @@ import {
   getActiveMappingConfig,
   setActiveMappingConfigId,
   loadMappingConfigById,
-  SourceField
+  FieldMap
 } from '@/lib/mapping';
+
+// 엑셀 파일 관련 타입 및 함수
 import { 
   loadFileInfos, 
   ExcelFileInfo,
   getSheetData,
   SheetData
 } from '@/lib/excel';
-import { Wand2, ArrowRight, RefreshCw } from "lucide-react";
-import { useFileStore } from '@/store/files';
-import { combinedSimilarity, normalizeFieldName, findOptimalFieldMappings } from '@/lib/similarity';
-import { toast } from 'react-hot-toast';
-import MappingPreview from './MappingPreview';
+
+// 드래그 앤 드롭 관련 컴포넌트
+import { DragAndDropProvider } from './DragAndDropProvider';
+import { SourceFieldList } from './SourceFieldList';
+import { TargetFieldList } from './TargetFieldList';
+import { MappingConnection } from './MappingConnection';
+import { DialogTrigger, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 // 필드 매퍼 컴포넌트 속성
 interface FieldMapperProps {
   onMappingComplete?: () => void;
 }
 
-// 유사 필드명 찾기 함수 (현재 수정)
-function findSimilarFields(sourceFields: string[], targetFields: string[], threshold = 0.7): Map<string, string> {
-  console.log('유사 필드 찾기 시작:', { sourceFields, targetFields, threshold });
-  return findOptimalFieldMappings(sourceFields, targetFields, threshold);
-}
-
-// 시트 인터페이스 정의
-interface Sheet {
-  name: string;
-  [key: string]: any;
-}
-
-// FieldMapper 컴포넌트 정의
+/**
+ * 필드 매퍼 컴포넌트
+ * 소스 필드와 타겟 필드 간의 매핑을 관리합니다.
+ */
 export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
   // 상태 관리
   const [files, setFiles] = useState<ExcelFileInfo[]>([]);
@@ -75,11 +77,12 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
   const [selectedSheet, setSelectedSheet] = useState<string>("");
   const [sourceFields, setSourceFields] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [sheetRecords, setSheetRecords] = useState<Record<string, any>[]>([]);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [activeFieldId, setActiveFieldId] = useState<string | null>(null);
+  const [addTargetDialogOpen, setAddTargetDialogOpen] = useState<boolean>(false);
+  const [newTargetField, setNewTargetField] = useState<string>("");
+  const [newTargetType, setNewTargetType] = useState<string>("string");
   
-  // 매핑 설정 관련 상태
-  const [configs, setConfigs] = useState<MappingConfig[]>([]);
-
   // 매핑 설정 & 파일 로드
   useEffect(() => {
     // 매핑 설정 로드
@@ -92,11 +95,21 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
     if (activeConfig) {
       setActiveMappingConfig(activeConfig);
       console.log('활성 매핑 설정:', activeConfig.name);
+      
+      // 첫 번째 필드맵이 있으면 활성화
+      if (activeConfig.fieldMaps && activeConfig.fieldMaps.length > 0) {
+        setActiveFieldId(activeConfig.fieldMaps[0].id);
+      }
     } else if (configs.length > 0) {
       // 없으면 첫 번째 설정을 활성으로 설정
       setActiveMappingConfig(configs[0]);
       setActiveMappingConfigId(configs[0].id);
       console.log('첫 번째 매핑 설정으로 설정:', configs[0].name);
+      
+      // 첫 번째 필드맵이 있으면 활성화
+      if (configs[0].fieldMaps && configs[0].fieldMaps.length > 0) {
+        setActiveFieldId(configs[0].fieldMaps[0].id);
+      }
     }
     
     // 파일 정보 로드
@@ -155,12 +168,11 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
     }
   }, [selectedFileId, files]);
   
-  // 파일/시트 선택이 변경되면 필드 목록과 레코드 데이터 업데이트
+  // 파일/시트 선택이 변경되면 필드 목록 업데이트
   useEffect(() => {
     const loadSheetData = async () => {
       if (!selectedFileId || !selectedSheet) {
         setSourceFields([]);
-        setSheetRecords([]);
         return;
       }
       
@@ -179,22 +191,13 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
             console.warn('시트에 헤더가 없습니다.');
             setSourceFields([]);
           }
-          
-          if (sheetData.data && sheetData.data.length > 0) {
-            setSheetRecords(sheetData.data);
-          } else {
-            console.warn('시트에 데이터가 없습니다.');
-            setSheetRecords([]);
-          }
         } else {
           console.error('시트 데이터를 찾을 수 없습니다.');
           setSourceFields([]);
-          setSheetRecords([]);
         }
       } catch (error) {
         console.error("시트 데이터 로드 오류:", error);
         setSourceFields([]);
-        setSheetRecords([]);
       } finally {
         setIsLoading(false);
       }
@@ -202,6 +205,130 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
     
     loadSheetData();
   }, [selectedFileId, selectedSheet, files]);
+  
+  // 매핑 설정 변경 처리
+  const handleConfigChange = (configId: string) => {
+    const config = loadMappingConfigById(configId);
+    if (config) {
+      setActiveMappingConfig(config);
+      setActiveMappingConfigId(configId);
+      
+      // 첫 번째 필드맵이 있으면 활성화
+      if (config.fieldMaps && config.fieldMaps.length > 0) {
+        setActiveFieldId(config.fieldMaps[0].id);
+      } else {
+        setActiveFieldId(null);
+      }
+    }
+  };
+  
+  // 타겟 필드 추가 다이얼로그 핸들러
+  const handleAddTargetField = () => {
+    if (!activeMappingConfig) {
+      toast.error('먼저 매핑 설정을 선택해주세요.');
+      return;
+    }
+    
+    if (!newTargetField.trim()) {
+      toast.error('필드명을 입력해주세요.');
+      return;
+    }
+    
+    // 이미 존재하는 필드인지 확인
+    const fieldExists = activeMappingConfig.fieldMaps.some(
+      field => field.targetField.name.toLowerCase() === newTargetField.trim().toLowerCase()
+    );
+    
+    if (fieldExists) {
+      toast.error('이미 존재하는 필드명입니다.');
+      return;
+    }
+    
+    // 새 필드맵 생성
+    const updatedConfig = { ...activeMappingConfig };
+    const newFieldMap: FieldMap = {
+      id: `field_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+      targetField: {
+        name: newTargetField.trim(),
+        description: '',
+        type: newTargetType
+      },
+      sourceFields: []
+    };
+    
+    updatedConfig.fieldMaps.push(newFieldMap);
+    updatedConfig.updated = Date.now();
+    
+    // 로컬 스토리지에 저장
+    const configs = loadMappingConfigs().map(config => 
+      config.id === updatedConfig.id ? updatedConfig : config
+    );
+    localStorage.setItem('excel_merger_mappings', JSON.stringify(configs));
+    
+    // 상태 업데이트
+    setActiveMappingConfig(updatedConfig);
+    setActiveFieldId(newFieldMap.id);
+    setAddTargetDialogOpen(false);
+    setNewTargetField('');
+    setNewTargetType('string');
+    
+    toast.success('타겟 필드가 추가되었습니다.');
+  };
+  
+  // 필드 매핑 업데이트 핸들러
+  const handleMappingUpdated = () => {
+    // 활성 매핑 설정 다시 로드
+    const config = getActiveMappingConfig();
+    if (config) {
+      setActiveMappingConfig(config);
+    }
+  };
+  
+  // 필드 선택 핸들러
+  const handleFieldSelect = (fieldId: string) => {
+    setActiveFieldId(fieldId);
+  };
+  
+  // 소스 필드 매핑 삭제 핸들러
+  const handleDeleteSourceMapping = (targetFieldId: string, sourceFieldIndex: number) => {
+    if (!activeMappingConfig) return;
+    
+    try {
+      // 해당 타겟 필드맵 찾기
+      const updatedConfig = { ...activeMappingConfig };
+      const fieldMapIndex = updatedConfig.fieldMaps.findIndex(
+        field => field.id === targetFieldId
+      );
+      
+      if (fieldMapIndex === -1) {
+        console.error(`타겟 필드를 찾을 수 없음: ${targetFieldId}`);
+        return;
+      }
+      
+      // 소스 필드 제거
+      updatedConfig.fieldMaps[fieldMapIndex].sourceFields.splice(sourceFieldIndex, 1);
+      updatedConfig.updated = Date.now();
+      
+      // 로컬 스토리지 업데이트
+      const configs = loadMappingConfigs().map(config => 
+        config.id === updatedConfig.id ? updatedConfig : config
+      );
+      localStorage.setItem('excel_merger_mappings', JSON.stringify(configs));
+      
+      // 상태 업데이트
+      setActiveMappingConfig(updatedConfig);
+      
+      toast.success('필드 매핑이 제거되었습니다.');
+    } catch (error) {
+      console.error('필드 매핑 제거 오류:', error);
+      toast.error('필드 매핑 제거 중 오류가 발생했습니다.');
+    }
+  };
+  
+  // 활성화된 필드맵 찾기
+  const activeField = activeMappingConfig?.fieldMaps.find(
+    field => field.id === activeFieldId
+  ) || null;
   
   // 자동 매핑 실행
   const handleAutoMapping = async () => {
@@ -214,7 +341,7 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
     
     try {
       // 타겟 필드 목록 (매핑 설정의 타겟 필드명)
-      const targetFields = activeMappingConfig.fieldMaps?.map(map => map.targetField.name) || [];
+      const targetFields = activeMappingConfig.fieldMaps.map(map => map.targetField.name);
       if (!targetFields.length) {
         toast.error('매핑 설정에 타겟 필드가 없습니다.');
         setIsLoading(false);
@@ -243,68 +370,76 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
         }
       }
       
-      // 유사도 기반 자동 매핑 (임계값 0.6으로 설정)
-      const mappings = findSimilarFields(sourceFields, targetFields, 0.6);
-      console.log('생성된 매핑:', mappings);
-      
-      if (mappings.size === 0) {
-        toast.error('유사한 필드를 찾을 수 없습니다.');
-        setIsLoading(false);
-        return;
-      }
-      
-      // 현재 매핑 설정 복제
-      const updatedConfig = { ...activeMappingConfig };
-      let mappingCount = 0;
-      
-      // 매핑 적용
-      for (const [sourceField, targetField] of mappings.entries()) {
-        // 해당 타겟 필드에 대한 필드맵 찾기
-        const fieldMapIndex = updatedConfig.fieldMaps.findIndex(
-          fieldMap => fieldMap.targetField.name === targetField
-        );
+      // 자동 매핑 시작 - 기존 매핑을 초기화하고 새로 매핑
+      if (window.confirm('자동 매핑을 실행하면 기존 매핑이 초기화됩니다. 계속하시겠습니까?')) {
+        // 현재 매핑 설정 복제 및 초기화
+        const updatedConfig = { ...activeMappingConfig };
         
-        if (fieldMapIndex !== -1) {
-          // 이미 매핑이 있는 경우, 소스 필드 추가
-          const sourceFieldObj = {
-            id: `${selectedFileId}_${selectedSheet}_${sourceField}`,
-            fileId: selectedFileId,
-            sheetName: selectedSheet,
-            fieldName: sourceField
-          };
+        // 모든 필드맵의 소스 필드 초기화
+        updatedConfig.fieldMaps.forEach(fieldMap => {
+          fieldMap.sourceFields = [];
+        });
+        
+        // 유사도 기반 자동 매핑 (임계값 0.6으로 설정)
+        const mappings = findOptimalFieldMappings(sourceFields, targetFields, 0.6);
+        console.log('생성된 매핑:', mappings);
+        
+        if (mappings.size === 0) {
+          toast.error('유사한 필드를 찾을 수 없습니다.');
+          setIsLoading(false);
+          return;
+        }
+        
+        let mappingCount = 0;
+        
+        // 매핑 적용 (각 소스 필드는 하나의 타겟 필드에만 매핑)
+        const usedSourceFields = new Set<string>();
+        
+        for (const [sourceField, targetField] of mappings.entries()) {
+          // 이미 사용된 소스 필드면 건너뜀 (1:1 매핑 보장)
+          if (usedSourceFields.has(sourceField)) {
+            continue;
+          }
           
-          // 이미 동일한 소스 필드가 있는지 확인
-          const hasSourceField = updatedConfig.fieldMaps[fieldMapIndex].sourceFields.some(
-            sf => sf.fileId === selectedFileId && sf.sheetName === selectedSheet && sf.fieldName === sourceField
+          // 해당 타겟 필드에 대한 필드맵 찾기
+          const fieldMapIndex = updatedConfig.fieldMaps.findIndex(
+            fieldMap => fieldMap.targetField.name === targetField
           );
           
-          if (!hasSourceField) {
+          if (fieldMapIndex !== -1) {
+            // 이미 매핑이 있는 경우, 소스 필드 추가
+            const sourceFieldObj = {
+              fileId: selectedFileId,
+              sheetName: selectedSheet,
+              fieldName: sourceField
+            };
+            
+            // 소스 필드 추가 및 사용 표시
             updatedConfig.fieldMaps[fieldMapIndex].sourceFields.push(sourceFieldObj);
+            usedSourceFields.add(sourceField);
             mappingCount++;
           }
         }
-      }
-      
-      // 매핑 설정 업데이트
-      if (mappingCount > 0) {
-        updatedConfig.updated = Date.now();
         
-        // 전역 상태에 매핑 설정 업데이트
-        setConfigs((prevConfigs: MappingConfig[]) => 
-          prevConfigs.map((config: MappingConfig) => 
+        // 매핑 설정 업데이트
+        if (mappingCount > 0) {
+          updatedConfig.updated = Date.now();
+          
+          // 로컬 스토리지에 매핑 설정 업데이트
+          const updatedConfigs = loadMappingConfigs().map(config => 
             config.id === updatedConfig.id ? updatedConfig : config
-          )
-        );
-        
-        // 매핑 설정 저장
-        const updatedConfigs = loadMappingConfigs().map(config => 
-          config.id === updatedConfig.id ? updatedConfig : config
-        );
-        localStorage.setItem('excel_merger_mappings', JSON.stringify(updatedConfigs));
-        
-        toast.success(`자동 매핑 완료: ${mappingCount}개 필드가 매핑되었습니다.`);
+          );
+          localStorage.setItem('excel_merger_mappings', JSON.stringify(updatedConfigs));
+          
+          // 상태 업데이트
+          setActiveMappingConfig(updatedConfig);
+          
+          toast.success(`자동 매핑 완료: ${mappingCount}개 필드가 매핑되었습니다.`);
+        } else {
+          toast.error('매핑할 수 있는 필드를 찾을 수 없습니다.');
+        }
       } else {
-        toast.error('이미 모든 가능한 필드가 매핑되어 있습니다.');
+        toast('자동 매핑이 취소되었습니다.');
       }
     } catch (error) {
       console.error("자동 매핑 오류:", error);
@@ -313,123 +448,6 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
       setIsLoading(false);
     }
   };
-  
-  // 필드 매핑 추가/삭제 이벤트 핸들러 개선
-  const handleAddSourceField = (targetFieldId: string, sourceField: SourceField) => {
-    if (!activeMappingConfig) return;
-
-    try {
-      console.log(`소스 필드 추가: ${JSON.stringify(sourceField)}`);
-      
-      // 이미 연결된 소스 필드인지 확인
-      const fieldMap = activeMappingConfig.fieldMaps.find(
-        map => map.targetField.name === targetFieldId
-      );
-      
-      if (!fieldMap) {
-        console.error(`타겟 필드를 찾을 수 없음: ${targetFieldId}`);
-        return;
-      }
-      
-      // 이미 존재하는 매핑인지 확인
-      const alreadyMapped = fieldMap.sourceFields.some(
-        sf => sf.fileId === sourceField.fileId && 
-             sf.sheetName === sourceField.sheetName && 
-             sf.fieldName === sourceField.fieldName
-      );
-      
-      if (alreadyMapped) {
-        toast.error('이미 매핑된 필드입니다.');
-        return;
-      }
-      
-      // 소스 필드 추가
-      const updatedConfig = { ...activeMappingConfig };
-      const mapIndex = updatedConfig.fieldMaps.findIndex(
-        map => map.targetField.name === targetFieldId
-      );
-      
-      if (mapIndex !== -1) {
-        // 고유 ID 생성
-        const sourceFieldWithId = {
-          ...sourceField,
-          id: `${sourceField.fileId}_${sourceField.sheetName}_${sourceField.fieldName}`
-        };
-        
-        updatedConfig.fieldMaps[mapIndex].sourceFields.push(sourceFieldWithId);
-        updatedConfig.updated = Date.now();
-        
-        // 상태 업데이트
-        setActiveMappingConfig(updatedConfig);
-        
-        // 로컬 스토리지 업데이트
-        const configs = loadMappingConfigs().map(config => 
-          config.id === updatedConfig.id ? updatedConfig : config
-        );
-        localStorage.setItem('excel_merger_mappings', JSON.stringify(configs));
-        
-        toast.success('필드가 성공적으로 매핑되었습니다.');
-      }
-    } catch (error) {
-      console.error('필드 매핑 추가 오류:', error);
-      toast.error('필드 매핑 추가 중 오류가 발생했습니다.');
-    }
-  };
-
-  const handleRemoveSourceField = (targetFieldId: string, sourceFieldIndex: number) => {
-    if (!activeMappingConfig) return;
-    
-    try {
-      // 해당 타겟 필드 찾기
-      const updatedConfig = { ...activeMappingConfig };
-      const mapIndex = updatedConfig.fieldMaps.findIndex(
-        map => map.targetField.name === targetFieldId
-      );
-      
-      if (mapIndex === -1) {
-        console.error(`타겟 필드를 찾을 수 없음: ${targetFieldId}`);
-        return;
-      }
-      
-      // 소스 필드가 범위를 벗어나는지 확인
-      if (sourceFieldIndex < 0 || sourceFieldIndex >= updatedConfig.fieldMaps[mapIndex].sourceFields.length) {
-        console.error(`유효하지 않은 소스 필드 인덱스: ${sourceFieldIndex}`);
-        return;
-      }
-      
-      // 매핑 제거
-      updatedConfig.fieldMaps[mapIndex].sourceFields.splice(sourceFieldIndex, 1);
-      updatedConfig.updated = Date.now();
-      
-      // 상태 업데이트
-      setActiveMappingConfig(updatedConfig);
-      
-      // 로컬 스토리지 업데이트
-      const configs = loadMappingConfigs().map(config => 
-        config.id === updatedConfig.id ? updatedConfig : config
-      );
-      localStorage.setItem('excel_merger_mappings', JSON.stringify(configs));
-      
-      toast.success('필드 매핑이 제거되었습니다.');
-    } catch (error) {
-      console.error('필드 매핑 제거 오류:', error);
-      toast.error('필드 매핑 제거 중 오류가 발생했습니다.');
-    }
-  };
-
-  // 매핑 설정 선택 처리
-  const handleConfigChange = (configId: string) => {
-    const config = loadMappingConfigById(configId);
-    if (config) {
-      setActiveMappingConfig(config);
-      setActiveMappingConfigId(configId);
-    }
-  };
-  
-  // 타겟 필드 목록 (현재 매핑 설정의 필드맵에서 타겟 필드 추출)
-  const targetFields = activeMappingConfig 
-    ? (activeMappingConfig.fieldMaps || []).map(map => map.targetField.name) 
-    : [];
   
   return (
     <Card>
@@ -542,244 +560,92 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
           </div>
         </div>
         
-        {/* 매핑 결과 테이블 */}
-        {activeMappingConfig && activeMappingConfig.fieldMaps?.length > 0 && (
-          <div className="border rounded-md p-4 space-y-2">
-            <h3 className="text-lg font-semibold">현재 매핑</h3>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[50%]">타겟 필드</TableHead>
-                  <TableHead className="w-[50%]">소스 필드</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(activeMappingConfig.fieldMaps || []).map(fieldMap => {
-                  // 현재 파일/시트에 해당하는 소스 필드만 표시
-                  const relevantSourceFields = fieldMap.sourceFields.filter(
-                    sf => sf.fileId === selectedFileId && sf.sheetName === selectedSheet
-                  );
-                  
-                  // 소스 필드가 없으면 "미매핑" 상태로 표시
-                  if (relevantSourceFields.length === 0) {
-                    return (
-                      <TableRow key={fieldMap.targetField.name}>
-                        <TableCell className="font-medium">{fieldMap.targetField.name}</TableCell>
-                        <TableCell className="text-muted-foreground italic">
-                          미매핑
-                        </TableCell>
-                      </TableRow>
-                    );
-                  }
-                  
-                  // 소스 필드가 있으면 각각 표시
-                  return relevantSourceFields.map((sourceField, index) => (
-                    <TableRow key={`${fieldMap.targetField.name}-${sourceField.fieldName}`}>
-                      {index === 0 && (
-                        <TableCell className="font-medium" rowSpan={relevantSourceFields.length}>
-                          {fieldMap.targetField.name}
-                        </TableCell>
-                      )}
-                      <TableCell className="flex justify-between items-center">
-                        <span>{sourceField.fieldName}</span>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 w-8 p-0 text-destructive"
-                          onClick={() => handleRemoveSourceField(
-                            fieldMap.targetField.name,
-                            index
-                          )}
-                        >
-                          ×
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ));
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-        
-        {/* 매핑 설정이 없는 경우 */}
-        {!activeMappingConfig && (
-          <div className="text-center py-8 text-muted-foreground border rounded-md">
-            <p>매핑 설정이 없습니다. 매핑 설정 관리 탭에서 먼저 매핑 설정을 생성해주세요.</p>
-          </div>
-        )}
-        
-        {/* 소스 필드가 없는 경우 */}
-        {activeMappingConfig && sourceFields.length === 0 && (
-          <div className="text-center py-8 text-muted-foreground border rounded-md">
-            <p>파일과 시트를 선택하면 소스 필드가 표시됩니다.</p>
-          </div>
-        )}
-        
-        {/* 원본 데이터 표시 영역 */}
-        {selectedFileId && selectedSheet && (
-          <div className="mt-6 border rounded-md p-4">
-            <h3 className="text-lg font-semibold mb-4">원본 데이터</h3>
+        {/* 타겟 필드 추가 다이얼로그 */}
+        <Dialog open={addTargetDialogOpen} onOpenChange={setAddTargetDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>타겟 필드 추가</DialogTitle>
+              <DialogDescription>
+                새로운 타겟 필드를 추가합니다. 소스 필드를 매핑할 대상 필드입니다.
+              </DialogDescription>
+            </DialogHeader>
             
-            <div className="mb-4">
-              <h4 className="font-medium mb-2">파일: {files.find(f => f.id === selectedFileId)?.name} / 시트: {selectedSheet}</h4>
-              <p className="text-sm text-muted-foreground mb-2">필드 수: {sourceFields.length}</p>
-              <p className="text-sm text-muted-foreground">레코드 수: {sheetRecords.length}</p>
-            </div>
-            
-            {/* 파일 정보 디버깅 */}
-            <div className="mb-4 p-3 bg-gray-100 rounded">
-              <h4 className="font-medium mb-2">파일 정보 디버깅</h4>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="font-semibold">ID:</div>
-                <div>{selectedFileId}</div>
-                
-                <div className="font-semibold">이름:</div>
-                <div>{files.find(f => f.id === selectedFileId)?.name}</div>
-                
-                <div className="font-semibold">시트 정보:</div>
-                <div>
-                  {files.find(f => f.id === selectedFileId)?.sheets ? 
-                    JSON.stringify(files.find(f => f.id === selectedFileId)?.sheets) : '시트 정보 없음'}
-                </div>
-                
-                <div className="font-semibold">데이터 존재 여부:</div>
-                <div>
-                  {files.find(f => f.id === selectedFileId)?.data ? 
-                    `데이터 길이: ${files.find(f => f.id === selectedFileId)?.data?.length} 바이트` : '데이터 없음'}
-                </div>
+            <div className="grid gap-4 py-4">
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="name" className="text-right">
+                  필드명
+                </Label>
+                <Input
+                  id="name"
+                  value={newTargetField}
+                  onChange={(e) => setNewTargetField(e.target.value)}
+                  placeholder="예: 이름, 주소, 전화번호"
+                  className="col-span-3"
+                />
               </div>
               
-              <div className="mt-3">
-                <button
-                  className="px-3 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600"
-                  onClick={() => {
-                    const fileInfo = files.find(f => f.id === selectedFileId);
-                    if (fileInfo && fileInfo.data) {
-                      try {
-                        // 데이터 샘플 출력
-                        const dataSample = fileInfo.data.length > 200 
-                          ? fileInfo.data.substring(0, 200) + '...' 
-                          : fileInfo.data;
-                        console.log('파일 데이터 샘플:', dataSample);
-                        
-                        // Base64 디코딩 시도
-                        try {
-                          const decoded = atob(fileInfo.data);
-                          console.log('Base64 디코딩 성공, 길이:', decoded.length);
-                          
-                          // JSON 파싱 시도
-                          const jsonData = JSON.parse(decoded);
-                          console.log('파일 데이터 구조:', Object.keys(jsonData));
-                          console.log('시트 목록:', jsonData.sheets?.map((s: any) => 
-                            typeof s === 'object' ? s.name : s
-                          ));
-                          
-                          // 시트 데이터 접근
-                          const sheet = jsonData.sheets?.find((s: any) => 
-                            (typeof s === 'object' && s.name === selectedSheet) || 
-                            (typeof s === 'string' && s === selectedSheet)
-                          );
-                          console.log('시트 데이터:', sheet ? Object.keys(sheet) : '없음');
-                          
-                          if (sheet && sheet.headers) {
-                            console.log('헤더:', sheet.headers);
-                            setSourceFields(sheet.headers);
-                            
-                            if (sheet.data) {
-                              console.log('레코드 샘플:', sheet.data.slice(0, 3));
-                              setSheetRecords(sheet.data);
-                            } else if (sheet.rows) {
-                              console.log('행 샘플:', sheet.rows.slice(0, 3));
-                              setSheetRecords(sheet.rows);
-                            }
-                          }
-                        } catch (e) {
-                          console.error('Base64 디코딩/파싱 실패:', e);
-                          alert('파일 데이터 형식이 올바르지 않습니다.');
-                        }
-                      } catch (e) {
-                        console.error('파일 데이터 처리 오류:', e);
-                      }
-                    } else {
-                      alert('파일 데이터가 없습니다.');
-                    }
-                  }}
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="type" className="text-right">
+                  데이터 타입
+                </Label>
+                <Select
+                  value={newTargetType}
+                  onValueChange={setNewTargetType}
                 >
-                  데이터 직접 읽기
-                </button>
-                
-                <button
-                  className="ml-2 px-3 py-1 text-xs bg-red-500 text-white rounded hover:bg-red-600"
-                  onClick={() => {
-                    localStorage.removeItem('excel_merger_files');
-                    alert('로컬 스토리지 초기화 완료. 페이지를 새로고침하세요.');
-                  }}
-                >
-                  로컬 스토리지 초기화
-                </button>
+                  <SelectTrigger className="col-span-3">
+                    <SelectValue placeholder="데이터 타입 선택" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="string">문자열</SelectItem>
+                    <SelectItem value="number">숫자</SelectItem>
+                    <SelectItem value="date">날짜</SelectItem>
+                    <SelectItem value="boolean">불리언</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             
-            {sheetRecords.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm border-collapse">
-                  <thead>
-                    <tr className="border-b">
-                      <th className="text-left px-3 py-2">#</th>
-                      {sourceFields.map((field, index) => (
-                        <th key={index} className="text-left px-3 py-2">{field}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sheetRecords.slice(0, 10).map((record, rowIndex) => (
-                      <tr key={rowIndex} className="border-b">
-                        <td className="px-3 py-2">{rowIndex + 1}</td>
-                        {sourceFields.map((field, colIndex) => {
-                          // record가 배열인 경우
-                          if (Array.isArray(record)) {
-                            return (
-                              <td key={colIndex} className="px-3 py-2">
-                                {record[colIndex] !== undefined ? String(record[colIndex]) : ''}
-                              </td>
-                            );
-                          }
-                          // record가 객체인 경우
-                          else if (typeof record === 'object' && record !== null) {
-                            return (
-                              <td key={colIndex} className="px-3 py-2">
-                                {record[field] !== undefined ? String(record[field]) : ''}
-                              </td>
-                            );
-                          }
-                          return <td key={colIndex} className="px-3 py-2"></td>;
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {sheetRecords.length > 10 && (
-                  <p className="text-sm text-muted-foreground mt-3 text-center">
-                    전체 {sheetRecords.length}개 레코드 중 처음 10개만 표시됩니다.
-                  </p>
-                )}
-              </div>
-            ) : (
-              <p className="text-center py-4 text-muted-foreground">
-                레코드 데이터를 로드할 수 없습니다.
-              </p>
-            )}
-            
-            {/* 원본 JSON 데이터 (디버깅용) */}
-            <details className="mt-4">
-              <summary className="cursor-pointer text-sm text-muted-foreground">원본 데이터 JSON 보기</summary>
-              <pre className="mt-2 p-4 bg-gray-100 rounded text-xs overflow-x-auto max-h-[400px]">
-                {JSON.stringify(sheetRecords, null, 2)}
-              </pre>
-            </details>
-          </div>
-        )}
+            <DialogFooter>
+              <Button type="submit" onClick={handleAddTargetField}>
+                추가
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        
+        {/* 매핑 영역 */}
+        <div className="relative">
+          <DragAndDropProvider
+            selectedFileId={selectedFileId}
+            selectedSheet={selectedSheet}
+            onMappingUpdated={handleMappingUpdated}
+          >
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* 소스 필드 목록 */}
+              <SourceFieldList
+                sourceFields={sourceFields}
+                fileId={selectedFileId}
+                sheetName={selectedSheet}
+                onDragStart={() => setIsDragging(true)}
+              />
+              
+              {/* 타겟 필드 목록 */}
+              <TargetFieldList
+                mappingConfig={activeMappingConfig}
+                activeFieldId={activeFieldId}
+                onFieldSelect={handleFieldSelect}
+                onAddTarget={() => setAddTargetDialogOpen(true)}
+                onDeleteSourceMapping={handleDeleteSourceMapping}
+              />
+              
+              {/* 매핑 연결선 */}
+              <MappingConnection
+                activeField={activeField}
+                isDragging={isDragging}
+              />
+            </div>
+          </DragAndDropProvider>
+        </div>
       </CardContent>
     </Card>
   );
