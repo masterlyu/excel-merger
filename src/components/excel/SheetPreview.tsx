@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ExcelFileInfo, readExcelFile } from '@/lib/excel';
+import { ExcelFileInfo, getSheetData, SheetData } from '@/lib/excel';
 
 export interface SheetPreviewProps {
   file: ExcelFileInfo;
@@ -14,58 +14,52 @@ export interface SheetPreviewProps {
 }
 
 export default function SheetPreview({ file, isSelected, onSelect }: SheetPreviewProps) {
-  const [selectedSheetIndex, setSelectedSheetIndex] = useState(0);
-  const [sheetData, setSheetData] = useState<{
-    headers: string[];
-    data: Record<string, string | number | null>[];
-    title?: string;
-  } | null>(null);
+  const [selectedSheetName, setSelectedSheetName] = useState<string>('');
+  const [sheetData, setSheetData] = useState<SheetData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
+  // 컴포넌트 마운트 시 첫 번째 시트 선택
+  useEffect(() => {
+    if (file && file.sheets && file.sheets.length > 0) {
+      const firstSheet = file.sheets[0];
+      setSelectedSheetName(firstSheet.name);
+    }
+  }, [file]);
+
+  // 선택된 시트가 변경될 때마다 데이터 로드
+  useEffect(() => {
+    if (file && selectedSheetName) {
+      loadSheetData(selectedSheetName);
+    }
+  }, [file, selectedSheetName]);
+
   // 시트 데이터 로드
-  const loadSheetData = async (sheetIndex: number) => {
+  const loadSheetData = async (sheetName: string) => {
     try {
       setIsLoading(true);
+      console.log(`[SheetPreview] 시트 데이터 로드 시작 - 파일: ${file.name}, 시트: ${sheetName}`);
       
-      // Base64 데이터를 File 객체로 변환
-      const binaryData = atob(file.data.split(',')[1]);
-      const array = new Uint8Array(binaryData.length);
-      for (let i = 0; i < binaryData.length; i++) {
-        array[i] = binaryData.charCodeAt(i);
-      }
+      const data = await getSheetData(file.id, sheetName);
       
-      const fileObj = new File([array], file.name, {
-        type: file.type,
-        lastModified: file.lastModified
-      });
-
-      const excelData = await readExcelFile(fileObj);
-      const selectedSheet = excelData.sheets[sheetIndex];
-      
-      if (selectedSheet) {
-        setSheetData({
-          headers: selectedSheet.headers,
-          data: selectedSheet.data,
-          title: selectedSheet.title
-        });
+      if (data) {
+        console.log(`[SheetPreview] 시트 데이터 로드 성공 - 헤더: ${data.headers.length}, 데이터 행: ${data.data?.length || 0}`);
+        setSheetData(data);
+      } else {
+        console.error(`[SheetPreview] 시트 데이터 로드 실패`);
+        setSheetData(null);
       }
     } catch (error) {
-      console.error('Error loading sheet data:', error);
+      console.error('[SheetPreview] 시트 데이터 로드 중 오류 발생:', error);
+      setSheetData(null);
     } finally {
       setIsLoading(false);
     }
   };
 
-  // 컴포넌트 마운트 시 첫 번째 시트 데이터 로드
-  useEffect(() => {
-    loadSheetData(0);
-  }, [file.id]); // file.id가 변경될 때마다 데이터 다시 로드
-
-  // 시트 변경 시 데이터 로드
-  const handleSheetChange = (index: string) => {
-    const sheetIndex = parseInt(index);
-    setSelectedSheetIndex(sheetIndex);
-    loadSheetData(sheetIndex);
+  // 시트 변경 핸들러
+  const handleSheetChange = (sheetName: string) => {
+    console.log(`[SheetPreview] 시트 변경: ${sheetName}`);
+    setSelectedSheetName(sheetName);
   };
 
   return (
@@ -88,14 +82,14 @@ export default function SheetPreview({ file, isSelected, onSelect }: SheetPrevie
               {file.sheets.length} 시트
             </Badge>
             <Badge variant="secondary">
-              {file.recordCount.toLocaleString()} 행
+              {file.recordCount?.toLocaleString() || '0'} 행
             </Badge>
           </div>
         </div>
 
         {/* 시트 선택 드롭다운 */}
         <Select
-          value={selectedSheetIndex.toString()}
+          value={selectedSheetName}
           onValueChange={handleSheetChange}
         >
           <SelectTrigger className="w-[200px]">
@@ -103,8 +97,8 @@ export default function SheetPreview({ file, isSelected, onSelect }: SheetPrevie
           </SelectTrigger>
           <SelectContent>
             {file.sheets.map((sheet, index) => (
-              <SelectItem key={index} value={index.toString()}>
-                {sheet}
+              <SelectItem key={index} value={sheet.name}>
+                {sheet.name} {sheet.rowCount ? `(${sheet.rowCount}행)` : ''}
               </SelectItem>
             ))}
           </SelectContent>
@@ -130,7 +124,7 @@ export default function SheetPreview({ file, isSelected, onSelect }: SheetPrevie
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {sheetData.data.slice(0, 10).map((row, rowIndex) => (
+                {(sheetData.data || []).slice(0, 10).map((row, rowIndex) => (
                   <TableRow key={rowIndex}>
                     {sheetData.headers.map((header, colIndex) => (
                       <TableCell key={colIndex}>
@@ -143,7 +137,7 @@ export default function SheetPreview({ file, isSelected, onSelect }: SheetPrevie
             </Table>
           </ScrollArea>
           
-          {sheetData.data.length > 10 && (
+          {sheetData.data && sheetData.data.length > 10 && (
             <div className="text-sm text-gray-500 text-right">
               전체 {sheetData.data.length.toLocaleString()}행 중 처음 10행만 표시됩니다.
             </div>
@@ -151,7 +145,7 @@ export default function SheetPreview({ file, isSelected, onSelect }: SheetPrevie
         </div>
       ) : (
         <div className="text-center py-4 text-gray-500">
-          데이터를 불러올 수 없습니다.
+          {selectedSheetName ? '데이터를 불러올 수 없습니다.' : '시트를 선택해주세요.'}
         </div>
       )}
     </div>
