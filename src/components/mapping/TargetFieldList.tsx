@@ -13,13 +13,26 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Droppable } from '@hello-pangea/dnd';
-import { Trash2, Plus, ArrowUpDown, PlusCircle, XCircle } from 'lucide-react';
+import { Trash2, Plus, ArrowUpDown, PlusCircle, XCircle, X, AlertCircle } from 'lucide-react';
 import { MappingConfig, FieldMap } from '@/lib/mapping';
 import { toast } from 'react-hot-toast';
 import { triggerMappingUpdated } from './DragAndDropProvider';
+import { validateFieldMap } from '@/lib/validation';
+import { ValidationIndicator } from './ValidationIndicator';
 
 // 매핑 이벤트 이름 (DragAndDropProvider.tsx와 일치해야 함)
 const MAPPING_UPDATED_EVENT = 'mappingUpdated';
+
+// 로컬 스토리지 키
+const REQUIRED_FIELDS_KEY = 'excel_merger_required_fields';
+
+/**
+ * 필수 필드 타입
+ */
+interface RequiredField {
+  name: string;
+  description?: string;
+}
 
 interface TargetFieldListProps {
   mappingConfig: MappingConfig | null;
@@ -114,6 +127,30 @@ export function TargetFieldList({
     triggerMappingUpdated();
   }, [onDeleteSourceMapping]);
 
+  // 필수 필드 목록
+  const [requiredFields, setRequiredFields] = useState<string[]>([]);
+
+  // 필수 필드 설정 로드
+  useEffect(() => {
+    try {
+      const configJson = localStorage.getItem(REQUIRED_FIELDS_KEY);
+      if (configJson) {
+        const config = JSON.parse(configJson);
+        if (config && config.fields && Array.isArray(config.fields)) {
+          const fieldNames = config.fields.map((field: RequiredField) => field.name);
+          setRequiredFields(fieldNames);
+        }
+      }
+    } catch (error) {
+      console.error('필수 필드 설정을 로드하는 중 오류 발생:', error);
+    }
+  }, []);
+
+  // 필드가 필수인지 확인하는 함수
+  const isRequiredField = (fieldName: string): boolean => {
+    return requiredFields.some(name => name.toLowerCase() === fieldName.toLowerCase());
+  };
+
   if (!mappingConfig) {
     return (
       <div className="text-center p-4">
@@ -149,6 +186,12 @@ export function TargetFieldList({
         const sourceFieldsMessage = validSourceFields.length === 0
           ? "여기에 소스 필드를 드롭하세요"
           : `${validSourceFields.length}개 필드 매핑됨`;
+        
+        // 해당 필드의 필수 여부 확인
+        const required = isRequiredField(field.targetField.name);
+        
+        // 필드맵 유효성 검증
+        const validationResult = validateFieldMap(field, required);
         
         return (
           <div
@@ -233,6 +276,20 @@ export function TargetFieldList({
                   </div>
                 )}
               </Droppable>
+            </div>
+            
+            {/* 필수 필드 표시 */}
+            {required && (
+              <div className="mt-2 text-xs text-red-500">
+                <Badge variant="destructive" className="text-xs px-1 py-0">
+                  필수
+                </Badge>
+              </div>
+            )}
+            
+            {/* 유효성 검증 표시 */}
+            <div className="mt-2 text-xs text-gray-500">
+              <ValidationIndicator validationResult={validationResult} size="sm" showDetails={false} />
             </div>
           </div>
         );

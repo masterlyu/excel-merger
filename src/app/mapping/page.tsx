@@ -4,8 +4,16 @@ import React, { useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import FieldMapper from '@/components/mapping/FieldMapper';
 import MappingConfigManager from '@/components/mapping/MappingConfigManager';
+import RequiredFieldConfigComponent from '@/components/mapping/RequiredFieldConfig';
+import MappingImportExport from '@/components/mapping/MappingImportExport';
 import PageHeader from '@/components/common/PageHeader';
 
+/**
+ * 매핑 페이지
+ * - 엑셀 필드 매핑 기능 제공
+ * - 매핑 설정 관리 기능 제공
+ * - 필수 필드 설정 기능 제공
+ */
 export default function MappingPage() {
   // 활성 탭 상태
   const [activeTab, setActiveTab] = useState<string>('field-mapping');
@@ -37,6 +45,8 @@ export default function MappingPage() {
         
         <TabsContent value="mapping-config" className="space-y-6">
           <MappingConfigManager onSelect={handleMappingSelect} />
+          <RequiredFieldConfigComponent />
+          <MappingImportExport />
         </TabsContent>
       </Tabs>
     </div>

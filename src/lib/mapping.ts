@@ -445,4 +445,81 @@ export function cleanupMappingConfigs(): void {
   localStorage.setItem(MAPPING_CONFIGS_KEY, JSON.stringify(cleanedConfigs));
   
   console.log(`매핑 설정 정리 완료: ${configs.length}개 설정 처리됨`);
+}
+
+/**
+ * 매핑 설정을 서버에 저장
+ * 서버 API가 구현되면 이 함수를 통해 매핑 정보를 중앙 데이터베이스에 저장합니다.
+ */
+export async function saveMappingConfigToServer(config: MappingConfig): Promise<boolean> {
+  try {
+    // TODO: 실제 서버 API 호출로 대체 필요
+    console.log('매핑 설정을 서버에 저장:', config.name);
+    
+    // 서버 저장 성공 시뮬레이션 (개발 중)
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        // API 호출이 구현되면 이 부분을 대체
+        // fetch('/api/mapping/save', {
+        //   method: 'POST',
+        //   headers: { 'Content-Type': 'application/json' },
+        //   body: JSON.stringify(config)
+        // })
+        console.log('서버 저장 완료 (시뮬레이션)');
+        resolve(true);
+      }, 500);
+    });
+  } catch (error) {
+    console.error('서버에 매핑 설정 저장 중 오류:', error);
+    return false;
+  }
+}
+
+/**
+ * 학습된 매핑 패턴을 기반으로 자동 매핑 제안
+ * 이전 매핑 설정에서 유사한 패턴을 찾아 매핑 제안
+ */
+export function suggestMappingsFromHistory(
+  sourceFields: string[],
+  existingConfigs: MappingConfig[]
+): Map<string, string[]> {
+  const suggestions = new Map<string, string[]>();
+  const fieldPatterns = new Map<string, Set<string>>();
+  
+  // 이전 매핑 설정에서 패턴 수집
+  existingConfigs.forEach(config => {
+    config.fieldMaps.forEach(fieldMap => {
+      const targetName = fieldMap.targetField.name.toLowerCase();
+      
+      if (!fieldPatterns.has(targetName)) {
+        fieldPatterns.set(targetName, new Set<string>());
+      }
+      
+      // 소스 필드 이름 패턴 저장
+      fieldMap.sourceFields.forEach(sourceField => {
+        fieldPatterns.get(targetName)?.add(sourceField.fieldName.toLowerCase());
+      });
+    });
+  });
+  
+  // 소스 필드에 대해 매칭되는 타겟 필드 찾기
+  sourceFields.forEach(sourceField => {
+    const lowerSourceField = sourceField.toLowerCase();
+    
+    fieldPatterns.forEach((patterns, targetField) => {
+      // 직접 일치하는 경우
+      if (patterns.has(lowerSourceField)) {
+        if (!suggestions.has(targetField)) {
+          suggestions.set(targetField, []);
+        }
+        suggestions.get(targetField)?.push(sourceField);
+      }
+      // 부분 일치 검사 (정확도 향상을 위한 추가 로직)
+      else {
+        // 여기에 부분 일치 로직 구현 가능
+      }
+    });
+  });
+  
+  return suggestions;
 } 
