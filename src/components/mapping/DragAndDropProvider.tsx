@@ -3,7 +3,24 @@
 import React, { createContext, useState, useContext, ReactNode } from 'react';
 import { DragDropContext, DropResult } from '@hello-pangea/dnd';
 import { toast } from 'react-hot-toast';
-import { SourceField, addFieldMap, getActiveMappingConfig, loadMappingConfigs } from '@/lib/mapping';
+import {
+  MappingConfig,
+  FieldMap,
+  SourceField,
+  loadMappingConfigs,
+  getActiveMappingConfig,
+  getActiveMappingConfigId
+} from '@/lib/mapping';
+
+// 매핑 업데이트를 위한 커스텀 이벤트 생성
+const MAPPING_UPDATED_EVENT = 'mappingUpdated';
+
+// 매핑 이벤트 트리거 함수
+export function triggerMappingUpdated() {
+  // 전역 이벤트로 매핑 업데이트 알림
+  const event = new CustomEvent(MAPPING_UPDATED_EVENT);
+  window.dispatchEvent(event);
+}
 
 // 드래그 앤 드롭 컨텍스트 타입 정의
 interface DragAndDropContextType {
@@ -53,98 +70,115 @@ export function DragAndDropProvider({
   const handleDragEnd = (result: DropResult) => {
     setIsDragging(false);
     
-    // 드롭 위치가 없으면 처리하지 않음
+    // 드롭이 완료되면 매핑 상태 업데이트
     if (!result.destination) {
       return;
     }
     
-    // 소스 및 대상 정보 추출
-    const { source, destination, draggableId } = result;
+    // 드랍된 타겟 필드 ID 추출 (드롭 대상 ID에서 'droppable-' 접두사 제거)
+    const targetFieldId = result.destination.droppableId.replace('droppable-', '');
     
-    // 동일한 위치로 드롭된 경우 처리하지 않음
-    if (source.droppableId === destination.droppableId && 
-        source.index === destination.index) {
+    // 디버깅 정보 추가
+    console.log('드롭 완료:', {
+      destination: result.destination,
+      droppableId: result.destination.droppableId,
+      targetFieldId
+    });
+    
+    // 소스 필드 정보 추출 (드래그된 아이템 ID에서 파일 ID, 시트명, 필드명 추출)
+    const [fileId, sheetName, fieldName] = result.draggableId.split('_');
+    
+    if (!fileId || !sheetName || !fieldName) {
+      console.error('유효하지 않은 소스 필드 ID 형식:', result.draggableId);
       return;
     }
     
-    console.log('Drag ended', result);
-    
-    // 소스 필드에서 타겟 필드로 드롭된 경우
-    if (source.droppableId === 'source-fields' && 
-        destination.droppableId.startsWith('target-')) {
-      const targetFieldId = destination.droppableId.replace('target-', '');
-      
-      // 드래그된 소스 필드 ID에서 정보 추출
-      const [fileId, sheetName, ...fieldNameParts] = draggableId.split('_');
-      const fieldName = fieldNameParts.join('_'); // 필드명에 언더스코어가 포함될 수 있음
-      
-      // 파일과 시트가 선택된 것과 일치하는지 확인
-      if (fileId !== selectedFileId || sheetName !== selectedSheet) {
-        toast.error('잘못된 소스 필드 정보입니다.');
-        return;
-      }
-      
-      // 활성 매핑 설정 조회
-      const activeConfig = getActiveMappingConfig();
-      if (!activeConfig) {
-        toast.error('활성화된 매핑 설정이 없습니다.');
-        return;
-      }
-      
-      // 소스 필드 객체 생성
-      const sourceField: SourceField = {
+    console.log('매핑 정보:', {
+      targetFieldId,
+      sourceField: {
         fileId,
         sheetName,
         fieldName
+      }
+    });
+    
+    // 활성 매핑 설정 ID 가져오기
+    const activeMappingConfigId = localStorage.getItem('excel_merger_active_mapping_config');
+    if (!activeMappingConfigId) {
+      toast.error('활성화된 매핑 설정이 없습니다.');
+      return;
+    }
+    
+    try {
+      // 모든 매핑 설정 로드
+      const allConfigs = JSON.parse(localStorage.getItem('excel_merger_mapping_configs') || '[]');
+      if (!Array.isArray(allConfigs) || allConfigs.length === 0) {
+        toast.error('매핑 설정을 찾을 수 없습니다.');
+        return;
+      }
+      
+      // 활성 매핑 설정 찾기
+      const configIndex = allConfigs.findIndex(config => config.id === activeMappingConfigId);
+      if (configIndex === -1) {
+        toast.error('활성 매핑 설정을 찾을 수 없습니다.');
+        return;
+      }
+      
+      // 활성 매핑 설정 복사
+      const updatedConfig = {...allConfigs[configIndex]};
+      
+      // 타겟 필드 맵 찾기
+      const fieldMapIndex = updatedConfig.fieldMaps.findIndex((map: any) => map.id === targetFieldId);
+      if (fieldMapIndex === -1) {
+        toast.error('타겟 필드를 찾을 수 없습니다.');
+        return;
+      }
+      
+      // 소스 필드 객체 생성 (일관된 형식 사용)
+      const newSourceField = {
+        fileId,
+        sheetName, 
+        fieldName
       };
       
-      try {
-        // 1:1 매핑을 보장하기 위해 처리
-        const updatedConfig = { ...activeConfig };
-        
-        // 1. 현재 타겟 필드에 이미 매핑된 소스 필드 제거 (새 매핑으로 대체)
-        const targetFieldMapIndex = updatedConfig.fieldMaps.findIndex(fm => fm.id === targetFieldId);
-        if (targetFieldMapIndex !== -1) {
-          updatedConfig.fieldMaps[targetFieldMapIndex].sourceFields = [];
-        }
-        
-        // 2. 다른 타겟 필드에 같은 소스 필드가 매핑되어 있으면 제거
-        updatedConfig.fieldMaps.forEach(fieldMap => {
-          if (fieldMap.id !== targetFieldId) {
-            fieldMap.sourceFields = fieldMap.sourceFields.filter(sf => 
-              !(sf.fileId === fileId && sf.sheetName === sheetName && sf.fieldName === fieldName)
-            );
-          }
-        });
-        
-        // 업데이트된 매핑 설정 저장
-        updatedConfig.updated = Date.now();
-        
-        // 로컬 스토리지에 저장
-        const configs = loadMappingConfigs().map(config => 
-          config.id === updatedConfig.id ? updatedConfig : config
-        );
-        localStorage.setItem('excel_merger_mappings', JSON.stringify(configs));
-        
-        // 매핑 추가
-        const addResult = addFieldMap(
-          activeConfig.id,
-          targetFieldId,
-          sourceField
-        );
-        
-        if (addResult) {
-          toast.success(`${fieldName} 필드가 ${targetFieldId}에 매핑되었습니다.`);
-          
-          // 상위 컴포넌트에 매핑 업데이트 알림
-          if (onMappingUpdated) {
-            onMappingUpdated();
-          }
-        }
-      } catch (error) {
-        console.error('필드 매핑 추가 오류:', error);
-        toast.error('필드 매핑을 추가하는 중 오류가 발생했습니다.');
+      // 이미 매핑된 소스 필드인지 확인 (중복 방지)
+      const isAlreadyMapped = updatedConfig.fieldMaps[fieldMapIndex].sourceFields.some(
+        (sf: any) => sf.fileId === fileId && sf.sheetName === sheetName && sf.fieldName === fieldName
+      );
+      
+      if (isAlreadyMapped) {
+        toast.error(`'${fieldName}' 필드는 이미 매핑되어 있습니다.`);
+        return;
       }
+      
+      // 기존 소스 필드 배열에 새 소스 필드 추가 (복사 후 추가)
+      updatedConfig.fieldMaps[fieldMapIndex].sourceFields = [
+        ...updatedConfig.fieldMaps[fieldMapIndex].sourceFields,
+        newSourceField
+      ];
+      
+      // 업데이트 시간 갱신
+      updatedConfig.updated = Date.now();
+      
+      // 업데이트된 설정을 배열에 저장
+      allConfigs[configIndex] = updatedConfig;
+      
+      // 로컬 스토리지에 저장
+      localStorage.setItem('excel_merger_mapping_configs', JSON.stringify(allConfigs));
+      
+      // 매핑 업데이트 이벤트 트리거
+      triggerMappingUpdated();
+      
+      // 성공 메시지
+      toast.success(`'${fieldName}' 필드가 매핑되었습니다.`);
+      
+      // 매핑 업데이트 콜백 호출
+      if (onMappingUpdated) {
+        onMappingUpdated();
+      }
+    } catch (error) {
+      console.error('매핑 업데이트 오류:', error);
+      toast.error('매핑 처리 중 오류가 발생했습니다.');
     }
   };
   

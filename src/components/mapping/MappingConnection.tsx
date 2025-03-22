@@ -23,38 +23,68 @@ export function MappingConnection({
     targetElement: HTMLElement | null;
   }>>([]);
   
-  // 연결 정보 업데이트
+  // 소스와 타겟 엘리먼트 사이의 연결선 생성
   useEffect(() => {
-    if (!activeField || isDragging) {
-      setConnections([]);
-      return;
-    }
-    
-    // 타겟 필드 요소
-    const targetElement = document.getElementById(`target-${activeField.id}`);
-    if (!targetElement) {
-      setConnections([]);
-      return;
-    }
-    
-    // 소스 필드별 연결 정보 생성
-    const newConnections = activeField.sourceFields.map(sourceField => {
-      // 고유 ID 생성 (또는 소스 필드에 이미 ID가 있다면 사용)
-      const sourceId = sourceField.id || 
-        `${sourceField.fileId}_${sourceField.sheetName}_${sourceField.fieldName}`;
+    const updateConnections = () => {
+      if (!activeField || isDragging) {
+        setConnections([]);
+        return;
+      }
+
+      // 타겟 필드 요소 - ID 체계 통일
+      const targetElement = document.querySelector(`#target-${activeField.id}`);
+      let finalTargetElement = targetElement;
       
-      // 소스 필드 요소
-      const sourceElement = document.getElementById(`source-${sourceId}`);
-      
-      return {
-        sourceId,
-        targetId: activeField.id,
-        sourceElement,
-        targetElement
-      };
-    });
-    
-    setConnections(newConnections);
+      if (!targetElement) {
+        console.warn(`타겟 필드 요소를 찾을 수 없음: #target-${activeField.id}`);
+        console.log('활성 필드 정보:', activeField);
+        // 다른 선택자로 시도
+        const alternateTargetElement = document.querySelector(`[data-field-id="${activeField.id}"]`);
+        if (!alternateTargetElement) {
+          setConnections([]);
+          return;
+        }
+        finalTargetElement = alternateTargetElement;
+      }
+
+      // sourceFields가 없거나 비어있는 경우 처리
+      if (!activeField.sourceFields || activeField.sourceFields.length === 0) {
+        setConnections([]);
+        return;
+      }
+
+      // 각 소스 필드에 대한 새로운 연결 생성
+      const newConnections = activeField.sourceFields.map(source => {
+        // 소스 필드 ID 정규화 (파일ID_시트명_필드명 형식)
+        const normalizedSourceId = `${source.fileId}_${source.sheetName}_${source.fieldName}`;
+        
+        // 소스 요소 찾기 - 통일된 data-source-field 속성 사용
+        const sourceElement = document.querySelector(`[data-source-field="${normalizedSourceId}"]`);
+        
+        if (!sourceElement) {
+          console.warn(`소스 필드 요소를 찾을 수 없음: [data-source-field="${normalizedSourceId}"]`);
+        }
+
+        return {
+          sourceId: normalizedSourceId,
+          targetId: activeField.id,
+          sourceElement: sourceElement as HTMLElement | null,
+          targetElement: finalTargetElement as HTMLElement | null
+        };
+      });
+
+      // 소스 엘리먼트가 있는 연결만 필터링
+      const validConnections = newConnections.filter(conn => conn.sourceElement !== null);
+      setConnections(validConnections);
+    };
+
+    updateConnections();
+
+    // 화면 크기 변경 시 연결선 업데이트
+    window.addEventListener('resize', updateConnections);
+    return () => {
+      window.removeEventListener('resize', updateConnections);
+    };
   }, [activeField, isDragging]);
   
   // 연결선 SVG 생성
