@@ -28,35 +28,47 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     try {
       setIsLoading(true);
+      console.log('파일 드롭됨:', acceptedFiles.map(f => f.name).join(', '));
 
       for (const file of acceptedFiles) {
+        console.log(`파일 처리 중: ${file.name} (${file.size} bytes, 타입: ${file.type})`);
+        
         // 파일 유효성 검사
         const error = validateExcelFile(file);
         if (error) {
           toast.error(error);
+          console.error(`파일 유효성 검사 실패: ${file.name}`, error);
           continue;
         }
 
         try {
+          console.log(`파일 저장 시작: ${file.name}`);
           const fileInfo = await saveFileInfo(file);
-          setFiles(prev => [...prev, fileInfo]);
+          console.log(`파일 정보 저장 완료:`, fileInfo.id, fileInfo.name);
+          
+          setFiles(prev => {
+            const newFiles = [...prev, fileInfo];
+            console.log('업데이트된 파일 목록:', newFiles.map(f => f.name));
+            return newFiles;
+          });
           
           // 첫 번째 파일인 경우 선택
           if (!selectedFileId) {
+            console.log(`첫 번째 파일 선택: ${fileInfo.id}`);
             setSelectedFileId(fileInfo.id);
           }
           
           toast.success(`${file.name} 파일이 업로드되었습니다.`);
         } catch (error) {
-          console.error('File processing error:', error);
-          toast.error(`${file.name} 파일 처리 중 오류가 발생했습니다.`);
+          console.error('파일 처리 오류:', file.name, error);
+          toast.error(`${file.name} 파일 처리 중 오류가 발생했습니다: ${error instanceof Error ? error.message : '알 수 없는 오류'}`);
         }
       }
 
       onUploadComplete?.();
     } catch (error) {
-      console.error('Upload error:', error);
-      toast.error('파일 업로드 중 오류가 발생했습니다.');
+      console.error('업로드 오류:', error);
+      toast.error(`파일 업로드 중 오류가 발생했습니다: ${error instanceof Error ? error.message : '알 수 없는 오류'}`);
     } finally {
       setIsLoading(false);
     }
@@ -145,7 +157,7 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
                           {file.sheets.length} 시트
                         </Badge>
                         <Badge variant="secondary">
-                          {file.recordCount.toLocaleString()} 행
+                          {file.recordCount?.toLocaleString() || '0'} 행
                         </Badge>
                       </div>
                     </div>
