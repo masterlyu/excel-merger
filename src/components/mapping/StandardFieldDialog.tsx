@@ -18,12 +18,12 @@ import {
 } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { useMappingStore } from '@/store/mapping';
-import { StandardField } from '@/types/mapping';
+import { Field } from '@/store/mapping';
 
 interface StandardFieldDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  field: StandardField | null;
+  field: Field | null;
 }
 
 export function StandardFieldDialog({
@@ -31,10 +31,10 @@ export function StandardFieldDialog({
   onOpenChange,
   field,
 }: StandardFieldDialogProps) {
-  const { activeConfigId, addStandardField, updateStandardField } = useMappingStore();
+  const { activeConfigId, addField, updateField } = useMappingStore();
   const [name, setName] = React.useState('');
   const [description, setDescription] = React.useState('');
-  const [type, setType] = React.useState<StandardField['type']>('text');
+  const [type, setType] = React.useState('text');
   const [required, setRequired] = React.useState(false);
 
   // 필드 정보 초기화
@@ -42,8 +42,9 @@ export function StandardFieldDialog({
     if (field) {
       setName(field.name);
       setDescription(field.description || '');
-      setType(field.type);
-      setRequired(field.required);
+      // 필드에 type 속성이 없으면 기본값 'text' 사용
+      setType((field as any).type || 'text');
+      setRequired(!!field.required);
     } else {
       setName('');
       setDescription('');
@@ -64,9 +65,9 @@ export function StandardFieldDialog({
     };
 
     if (field) {
-      updateStandardField(activeConfigId, { ...fieldData, id: field.id });
+      updateField(activeConfigId, field.id, fieldData);
     } else {
-      addStandardField(activeConfigId, fieldData);
+      addField(activeConfigId, fieldData);
     }
 
     onOpenChange(false);
@@ -106,7 +107,7 @@ export function StandardFieldDialog({
 
             <div className="space-y-2">
               <Label htmlFor="type">필드 타입</Label>
-              <Select value={type} onValueChange={(value: StandardField['type']) => setType(value)}>
+              <Select value={type} onValueChange={(value) => setType(value)}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>

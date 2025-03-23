@@ -3,14 +3,14 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useMappingStore } from '@/store/mapping';
-import { StandardField } from '@/types/mapping';
+import { Field } from '@/store/mapping';
 
 export function RecordMappingArea() {
-  const { configs, activeConfigId, selectedStandardFieldId } = useMappingStore();
+  const { configs, activeConfigId, selectedFieldId } = useMappingStore();
   
   const activeConfig = configs.find((c: { id: string }) => c.id === activeConfigId);
-  const selectedField = activeConfig?.standardFields.find(
-    (f: { id: string }) => f.id === selectedStandardFieldId
+  const selectedField = activeConfig?.fields.find(
+    (f: { id: string }) => f.id === selectedFieldId
   );
 
   if (!activeConfig) {
@@ -43,7 +43,7 @@ export function RecordMappingArea() {
     );
   }
 
-  const mappedRecords = activeConfig.records[selectedField.id] || [];
+  const mappedRecords = selectedField.mappings || [];
 
   return (
     <Card>

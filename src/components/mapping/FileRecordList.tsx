@@ -4,7 +4,7 @@ import { useFileStore } from "@/store/files";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Droppable, Draggable } from "@hello-pangea/dnd";
 import { Info } from "lucide-react";
-import { ExcelFileInfo } from '@/lib/excel';
+import { FileData } from '@/store/files';
 
 // 헤더 인터페이스 정의
 interface HeaderField {
@@ -18,7 +18,7 @@ export function FileRecordList() {
   const { files, activeFileId, getFileHeaders } = useFileStore();
   
   // 활성 파일 가져오기
-  const activeFile = files.find((f: ExcelFileInfo) => f.id === activeFileId);
+  const activeFile = files.find((f: FileData) => f.id === activeFileId);
   
   // 활성 파일의 헤더(필드) 가져오기
   const headers = activeFileId ? getFileHeaders(activeFileId) : [];
