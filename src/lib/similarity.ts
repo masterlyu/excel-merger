@@ -81,9 +81,13 @@ export function jaccardSimilarity(str1: string, str2: string): number {
  * 소문자 변환, 공백/특수문자 제거 등을 통해 비교 가능한 형태로 정규화
  */
 export function normalizeFieldName(fieldName: string): string {
+  if (!fieldName) return '';
+  
   return fieldName.toLowerCase()
-    .replace(/[_\s-]+/g, '') // 언더스코어, 공백, 하이픈 제거
-    .replace(/[^\w\s가-힣]/g, ''); // 한글, 영문, 숫자만 유지
+    .trim()
+    .replace(/[\s_\-–—]+/g, '') // 공백, 언더스코어, 하이픈, 대시 등 제거
+    .replace(/[^\w\s가-힣]/g, '') // 한글, 영문, 숫자만 유지
+    .replace(/\s+/g, ''); // 남아있는 공백 제거
 }
 
 /**

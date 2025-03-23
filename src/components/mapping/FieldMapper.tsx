@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from "react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Card,
   CardContent,
@@ -66,7 +66,7 @@ import { Label } from "@/components/ui/label";
 
 // 필드 매퍼 컴포넌트 속성
 interface FieldMapperProps {
-  onMappingComplete?: () => void;
+  onMappingComplete?: (fileId: string, sheetName: string) => void;
 }
 
 // 로컬 스토리지 키
@@ -98,6 +98,7 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
   const [addTargetDialogOpen, setAddTargetDialogOpen] = useState<boolean>(false);
   const [newTargetField, setNewTargetField] = useState<string>("");
   const [newTargetType, setNewTargetType] = useState<string>("string");
+  const [filesMappingStatus, setFilesMappingStatus] = useState<Record<string, boolean>>({});
 
   // 매핑 설정 & 파일 로드
   useEffect(() => {
@@ -194,6 +195,13 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
     const fileInfos = loadFileInfos();
     console.log('로드된 파일 정보:', fileInfos);
     setFiles(fileInfos);
+    
+    // 파일별 매핑 상태 초기화
+    const mappingStatus: Record<string, boolean> = {};
+    fileInfos.forEach(file => {
+      mappingStatus[file.id] = file.mappingCompleted || false;
+    });
+    setFilesMappingStatus(mappingStatus);
 
     // 파일이 있으면 첫 번째 파일 선택
     if (fileInfos.length > 0) {
@@ -224,6 +232,27 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
     // 초기 데이터 로드 완료 상태 설정
     setIsLoading(false);
   }, []);
+
+  // 파일의 매핑 완료 상태 업데이트 함수
+  const updateFileMappingStatus = (fileId: string, completed: boolean) => {
+    // 로컬 상태 업데이트
+    setFilesMappingStatus(prev => ({
+      ...prev,
+      [fileId]: completed
+    }));
+    
+    // 파일 정보 업데이트
+    const fileInfos = loadFileInfos();
+    const updatedFileInfos = fileInfos.map(file => {
+      if (file.id === fileId) {
+        return { ...file, mappingCompleted: completed };
+      }
+      return file;
+    });
+    
+    // 로컬 스토리지에 저장
+    localStorage.setItem('excel_file_infos', JSON.stringify(updatedFileInfos));
+  };
 
   // 선택된 파일이 변경되면 시트 목록 업데이트
   useEffect(() => {
@@ -283,6 +312,26 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
 
     loadSheetData();
   }, [selectedFileId, selectedSheet, files]);
+
+  // 파일 선택 변경 처리 핸들러
+  const handleFileChange = (fileId: string) => {
+    // 파일이 동일하면 아무것도 하지 않음
+    if (fileId === selectedFileId) return;
+    
+    // 파일 ID 변경
+    setSelectedFileId(fileId);
+    
+    // 매핑 완료 상태 확인
+    const isMappingCompleted = filesMappingStatus[fileId] || false;
+    
+    // 매핑 완료된 파일인 경우 알림 표시
+    if (isMappingCompleted) {
+      toast.success('이미 매핑이 완료된 파일입니다. 기존 매핑 정보가 로드됩니다.');
+    }
+    
+    // 활성화된 매핑 설정의 필드맵 중에서 현재 선택된 파일에 관련된 것만 보여주는 로직은
+    // 이미 TargetFieldList 컴포넌트에서 처리되므로 여기서는 따로 설정을 초기화하지 않음
+  };
 
   // 매핑 설정 변경 처리
   const handleConfigChange = (configId: string) => {
@@ -509,26 +558,406 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
     setActiveFieldId(fieldId);
   };
 
-  // 자동 매핑 후 매핑 설정 업데이트
-  const updateMappingAfterAutoMapping = (updatedConfig: MappingConfig, mappingCount: number) => {
-    try {
-      // 로컬 스토리지에 매핑 설정 업데이트
-      const updatedConfigs = loadMappingConfigs().map(config =>
-        config.id === updatedConfig.id ? updatedConfig : config
-      );
-      localStorage.setItem('excel_merger_mapping_configs', JSON.stringify(updatedConfigs));
-
-      // 상태 업데이트
-      setActiveMappingConfig(updatedConfig);
-      
-      // 매핑 이벤트 트리거 - 자동 매핑 후 소스 필드에 색상 표시
-      triggerMappingUpdated();
-
-      toast.success(`자동 매핑 완료: ${mappingCount}개 필드가 매핑되었습니다.`);
-    } catch (error) {
-      console.error('자동 매핑 설정 업데이트 오류:', error);
-      toast.error('매핑 설정 업데이트 중 오류가 발생했습니다.');
+  // 자동 매핑 실행
+  const handleAutoMapping = async () => {
+    if (!activeMappingConfig || !selectedFileId || !selectedSheet || sourceFields.length === 0) {
+      toast.error('자동 매핑을 위한 정보가 부족합니다.');
+      return;
     }
+
+    setIsLoading(true);
+    const toastId = toast.loading('자동 매핑 중...');
+
+    try {
+      // 디버깅 로그 추가
+      console.log('자동 매핑 시작');
+      console.log('타겟 필드:', activeMappingConfig.fieldMaps.map(fm => fm.targetField.name));
+      console.log('소스 필드:', sourceFields);
+      
+      // 현재 설정 복제
+      const updatedConfig = JSON.parse(JSON.stringify(activeMappingConfig)) as MappingConfig;
+
+      // 매핑 카운터 초기화
+      let mappingCount = 0;
+      
+      // 0단계: 다른 파일에서 매핑된 소스 필드 기반 자동 매핑
+      console.log('0단계: 다른 파일 매핑 정보 활용 시작');
+      for (const fieldMap of updatedConfig.fieldMaps) {
+        // 이미 현재 파일/시트에 매핑된 경우 건너뛰기
+        if (fieldMap.sourceFields.some(sf => sf.fileId === selectedFileId && sf.sheetName === selectedSheet)) {
+          console.log(`필드 ${fieldMap.targetField.name}은(는) 이미 현재 파일에 매핑됨, 건너뜀`);
+          continue;
+        }
+        
+        // 다른 파일에서 매핑된 소스 필드명 추출
+        const otherFileSourceFieldNames = fieldMap.sourceFields
+          .filter(sf => sf.fileId !== selectedFileId || sf.sheetName !== selectedSheet)
+          .map(sf => sf.fieldName);
+        
+        if (otherFileSourceFieldNames.length > 0) {
+          console.log(`다른 파일 매핑 정보 발견: ${fieldMap.targetField.name} -> ${otherFileSourceFieldNames.join(', ')}`);
+          
+          // 현재 소스 필드에 동일한 이름이 있는지 확인
+          for (const otherSourceField of otherFileSourceFieldNames) {
+            // 대소문자 무시하고 비교하여 현재 소스 필드에서 일치하는 필드 찾기
+            const matchingSourceField = sourceFields.find(
+              sf => sf.toLowerCase() === otherSourceField.toLowerCase()
+            );
+            
+            if (matchingSourceField) {
+              // 동일한 이름의 소스 필드가 있으면 자동 매핑
+              fieldMap.sourceFields.push({
+                fileId: selectedFileId,
+                sheetName: selectedSheet,
+                fieldName: matchingSourceField
+              });
+              mappingCount++;
+              console.log(`다른 파일 매핑 기반 자동 매핑 성공: ${fieldMap.targetField.name} -> ${matchingSourceField}`);
+              break; // 첫 번째 일치하는 필드만 사용
+            }
+          }
+        }
+      }
+
+      // 1단계: 이전 매핑 패턴 기반 자동 매핑 시도
+      console.log('1단계: 이전 매핑 패턴 기반 자동 매핑 시작');
+      const previousConfigs = loadMappingConfigs();
+      
+      let historySuggestions = new Map<string, string[]>();
+      if (previousConfigs.length > 0) {
+        historySuggestions = suggestMappingsFromHistory(sourceFields, previousConfigs);
+        console.log('이전 패턴 기반 제안:', historySuggestions);
+      }
+      
+      // 2단계: 필드 이름 유사도 기반 매핑
+      console.log('2단계: 필드 이름 유사도 기반 매핑 시작');
+      // 각 타겟 필드에 대해 가장 적합한 소스 필드 찾기
+      const normalizedSourceFields = sourceFields.map(field => normalizeFieldName(field));
+      console.log('정규화된 소스 필드:', normalizedSourceFields);
+      
+      let unmappedTargetFieldsCount = 0;
+
+      for (const fieldMap of updatedConfig.fieldMaps) {
+        // 이미 소스 필드가 있는 경우 건너뛰기
+        if (fieldMap.sourceFields.some(sf => sf.fileId === selectedFileId && sf.sheetName === selectedSheet)) {
+          console.log(`필드 ${fieldMap.targetField.name}은(는) 이미 매핑됨, 건너뜀`);
+          continue;
+        }
+        
+        unmappedTargetFieldsCount++;
+        const normalizedTargetField = normalizeFieldName(fieldMap.targetField.name);
+        console.log(`처리 중인 타겟 필드: ${fieldMap.targetField.name}, 정규화: ${normalizedTargetField}`);
+        
+        // 1. 이전 매핑 패턴에서 제안된 필드 확인
+        const historyMatches = historySuggestions.get(fieldMap.targetField.name.toLowerCase());
+        if (historyMatches && historyMatches.length > 0) {
+          console.log(`이전 패턴 매칭 시도: ${fieldMap.targetField.name} -> ${historyMatches.join(', ')}`);
+          // 이전 패턴에서 일치하는 필드 추가
+          for (const matchedField of historyMatches) {
+            if (sourceFields.includes(matchedField)) {
+              const sourceField: SourceField = {
+                fileId: selectedFileId,
+                sheetName: selectedSheet,
+                fieldName: matchedField
+              };
+              
+              fieldMap.sourceFields.push(sourceField);
+              mappingCount++;
+              
+              console.log(`이전 매핑 패턴 일치: ${fieldMap.targetField.name} -> ${matchedField} (성공)`);
+              break; // 첫 번째 일치 항목만 사용
+            }
+          }
+          
+          // 이미 매핑된 경우 다음 필드맵으로
+          if (fieldMap.sourceFields.some(sf => sf.fileId === selectedFileId && sf.sheetName === selectedSheet)) {
+            continue;
+          }
+        }
+        
+        // 2. 유사도 기반 매핑
+        // 정확한 일치 확인 (대소문자 무시)
+        console.log(`정확한 일치 확인 중: "${normalizedTargetField}"`);
+        
+        // 방법 1: 정규화된 문자열로 정확한 일치 검사
+        const exactMatchIndex = normalizedSourceFields.findIndex(
+          normalizedSourceField => normalizedSourceField === normalizedTargetField
+        );
+        
+        // 방법 2: 원본 문자열의 대소문자 무시 비교
+        const caseInsensitiveMatchIndex = sourceFields.findIndex(
+          sourceField => sourceField.toLowerCase() === fieldMap.targetField.name.toLowerCase()
+        );
+        
+        // 둘 중 하나라도 일치하면 매핑
+        if (exactMatchIndex !== -1 || caseInsensitiveMatchIndex !== -1) {
+          // 우선순위: 대소문자 무시 일치 > 정규화된 일치
+          const matchIndex = caseInsensitiveMatchIndex !== -1 ? caseInsensitiveMatchIndex : exactMatchIndex;
+          const exactMatch = sourceFields[matchIndex];
+          
+          console.log(`일치 발견: ${fieldMap.targetField.name} -> ${exactMatch} (인덱스: ${matchIndex})`);
+          console.log(`매치 방법: ${caseInsensitiveMatchIndex !== -1 ? '대소문자 무시 일치' : '정규화된 일치'}`);
+          
+          const sourceField: SourceField = {
+            fileId: selectedFileId,
+            sheetName: selectedSheet,
+            fieldName: exactMatch
+          };
+          
+          fieldMap.sourceFields.push(sourceField);
+          mappingCount++;
+          continue; // 정확한 일치가 있으면 다음 필드로
+        } else {
+          console.log(`정확한 일치 없음: ${fieldMap.targetField.name}`);
+          
+          // 모든 소스 필드와 타겟 필드 비교 디버깅
+          sourceFields.forEach((sourceField, index) => {
+            console.log(`비교: 소스 "${normalizeFieldName(sourceField)}" vs 타겟 "${normalizedTargetField}" - 일치 ${normalizeFieldName(sourceField) === normalizedTargetField ? '예' : '아니오'}`);
+          });
+        }
+
+        // 유사도 기반 매핑 (정확한 일치가 없는 경우)
+        const similarities = normalizedSourceFields.map((normalizedSourceField, index) => ({
+          sourceField: sourceFields[index],
+          similarity: combinedSimilarity(normalizedSourceField, normalizedTargetField)
+        }));
+
+        // 유사도 점수로 정렬
+        similarities.sort((a, b) => b.similarity - a.similarity);
+        
+        if (similarities.length > 0) {
+          console.log(`유사도 결과 (상위 3개): ${similarities.slice(0, 3).map(s => `${s.sourceField}(${s.similarity.toFixed(2)})`).join(', ')}`);
+        }
+
+        // 가장 높은 유사도 필드 사용 (임계값 이상인 경우)
+        if (similarities.length > 0 && similarities[0].similarity > 0.6) {
+          const sourceField: SourceField = {
+            fileId: selectedFileId,
+            sheetName: selectedSheet,
+            fieldName: similarities[0].sourceField
+          };
+          
+          fieldMap.sourceFields.push(sourceField);
+          mappingCount++;
+          console.log(`유사도 기반 매핑: ${fieldMap.targetField.name} -> ${similarities[0].sourceField} (유사도: ${similarities[0].similarity.toFixed(2)})`);
+        } else {
+          console.log(`유사도 임계값(0.6) 이상의 매칭 없음: ${fieldMap.targetField.name}`);
+        }
+      }
+
+      // 3단계: 최적 매핑 알고리즘 적용
+      console.log('3단계: 최적 매핑 알고리즘 적용 시작');
+      // 아직 매핑되지 않은 필드에 대해 최적의 매핑 찾기
+      const unmappedTargetFields = updatedConfig.fieldMaps
+        .filter(fieldMap => !fieldMap.sourceFields.some(sf => sf.fileId === selectedFileId && sf.sheetName === selectedSheet))
+        .map(fieldMap => fieldMap.targetField.name);
+
+      if (unmappedTargetFields.length > 0) {
+        console.log(`매핑되지 않은 타겟 필드 ${unmappedTargetFields.length}개:`, unmappedTargetFields);
+        
+        // 이미 매핑된 소스 필드 제외
+        const availableSourceFields = sourceFields.filter(sourceField => {
+          // 이미 매핑된 소스 필드 제외
+          const isAlreadyMapped = updatedConfig.fieldMaps.some(fieldMap => 
+            fieldMap.sourceFields.some(sf => 
+              sf.fileId === selectedFileId && 
+              sf.sheetName === selectedSheet && 
+              sf.fieldName === sourceField
+            )
+          );
+          return !isAlreadyMapped;
+        });
+        
+        console.log(`사용 가능한 소스 필드 ${availableSourceFields.length}개:`, availableSourceFields);
+        
+        const optimalMappings = findOptimalFieldMappings(
+          unmappedTargetFields, 
+          availableSourceFields
+        );
+
+        // 최적 매핑 적용
+        for (const [targetField, sourceField] of Object.entries(optimalMappings)) {
+          if (sourceField) {
+            const fieldMap = updatedConfig.fieldMaps.find(
+              fm => fm.targetField.name === targetField && 
+                   !fm.sourceFields.some(sf => sf.fileId === selectedFileId && sf.sheetName === selectedSheet)
+            );
+            
+            if (fieldMap) {
+              fieldMap.sourceFields.push({
+                fileId: selectedFileId,
+                sheetName: selectedSheet,
+                fieldName: sourceField
+              });
+              mappingCount++;
+              console.log(`최적 매핑 알고리즘 적용: ${targetField} -> ${sourceField}`);
+            }
+          }
+        }
+      }
+
+      // 매핑 결과 요약
+      console.log(`자동 매핑 완료: ${mappingCount}개의 필드가 매핑됨 (총 ${updatedConfig.fieldMaps.length}개 중)`);
+      
+      // 실시간 UI 업데이트를 위한 상태 갱신 및 매핑 업데이트 이벤트 트리거
+      updatedConfig.updated = Date.now(); // 타임스탬프 업데이트
+      
+      // 즉시 로컬 스토리지 업데이트
+      saveMappingConfig(updatedConfig);
+      
+      // 상태 업데이트 전에 잠시 대기하여 로컬 스토리지 쓰기 완료 보장
+      setTimeout(() => {
+        // UI 상태 업데이트 (깊은 복사를 통해 참조 문제 방지)
+        setActiveMappingConfig(JSON.parse(JSON.stringify(updatedConfig)));
+        
+        // 매핑 업데이트 이벤트 트리거 - UI 갱신을 위해 이 부분이 중요
+        setTimeout(() => {
+          triggerMappingUpdated(); // 첫 번째 트리거
+          
+          // 추가 안전장치: 브라우저 렌더링 보장을 위해 두 번째 트리거
+          setTimeout(() => {
+            triggerMappingUpdated(); // 두 번째 트리거 - 소스 필드 색상이 확실히 표시되도록
+          }, 50);
+        }, 10);
+        
+        // 토스트 메시지 표시
+        toast.dismiss(toastId);
+        if (mappingCount > 0) {
+          toast.success(`${mappingCount}개의 필드가 자동 매핑되었습니다.`);
+        } else {
+          toast.success('매핑할 수 있는 필드를 찾지 못했습니다.');
+        }
+        
+        // 매핑 완료 여부 자동 확인
+        checkMappingCompletion(updatedConfig);
+        
+        // 로딩 상태 해제
+        setIsLoading(false);
+      }, 50);
+    } catch (error) {
+      console.error('자동 매핑 중 오류:', error);
+      toast.error('자동 매핑 중 오류가 발생했습니다.');
+      toast.dismiss(toastId);
+      setIsLoading(false);
+    }
+  };
+  
+  // 매핑 완료 여부 자동 확인 함수
+  const checkMappingCompletion = useCallback((config: MappingConfig) => {
+    if (!selectedFileId || !selectedSheet) return;
+    
+    // 필수 필드 목록 가져오기
+    const requiredFieldNames = getRequiredFieldNames();
+    
+    // 모든 필드 매핑 여부 확인
+    const allFieldsMapped = checkAllFieldsMapped(config, selectedFileId, selectedSheet);
+    
+    // 필수 필드 매핑 여부 확인
+    let requiredFieldsMapped = true;
+    if (requiredFieldNames.length > 0) {
+      const missingRequiredFields = requiredFieldNames.filter(requiredName => {
+        // 해당 이름을 가진 타겟 필드 찾기
+        const targetField = config.fieldMaps.find(
+          fm => fm.targetField.name.toLowerCase() === requiredName.toLowerCase()
+        );
+        
+        // 필수 필드가 현재 선택된 파일/시트에 매핑되었는지 확인
+        return !targetField || !targetField.sourceFields.some(
+          sf => sf.fileId === selectedFileId && sf.sheetName === selectedSheet
+        );
+      });
+      
+      requiredFieldsMapped = missingRequiredFields.length === 0;
+      
+      if (!requiredFieldsMapped) {
+        console.log('미매핑된 필수 필드:', missingRequiredFields);
+      }
+    }
+    
+    // 매핑 완료 상태 업데이트
+    updateFileMappingStatus(selectedFileId, allFieldsMapped);
+    
+    // 매핑 완료되면 알림 표시
+    if (allFieldsMapped) {
+      if (requiredFieldsMapped) {
+        toast.success('모든 필드 매핑이 완료되었습니다!');
+      } else {
+        toast.error('모든 필드가 매핑되었지만, 일부 필수 필드가 누락되었습니다.');
+      }
+    }
+    
+    return { allFieldsMapped, requiredFieldsMapped };
+  }, [selectedFileId, selectedSheet]);
+  
+  // 소스 필드가 추가되거나 제거될 때마다 매핑 완료 여부 확인
+  useEffect(() => {
+    if (activeMappingConfig && selectedFileId && selectedSheet) {
+      checkMappingCompletion(activeMappingConfig);
+    }
+  }, [activeMappingConfig, selectedFileId, selectedSheet, checkMappingCompletion]);
+  
+  // 매핑 완료 처리 (버튼 클릭 시)
+  const handleCleanupMapping = async () => {
+    if (!activeMappingConfig || !selectedFileId || !selectedSheet) return;
+    
+    try {
+      // 필수 필드 검증
+      const requiredFieldNames = getRequiredFieldNames();
+      const { allFieldsMapped, requiredFieldsMapped } = checkMappingCompletion(activeMappingConfig) || 
+        { allFieldsMapped: false, requiredFieldsMapped: false };
+      
+      // 필수 필드가 누락된 경우 경고 표시
+      if (!requiredFieldsMapped && requiredFieldNames.length > 0) {
+        // 사용자 확인 요청
+        const confirmed = window.confirm(
+          `일부 필수 필드가 매핑되지 않았습니다. 그래도 계속 진행하시겠습니까?\n\n` +
+          `매핑이 필요한 필수 필드: ${requiredFieldNames.join(', ')}`
+        );
+        
+        if (!confirmed) {
+          return; // 사용자가 취소함
+        }
+      }
+      
+      // 매핑 설정 업데이트
+      const updatedConfig = { ...activeMappingConfig };
+      updatedConfig.updated = Date.now();
+      
+      // 로컬 스토리지 업데이트
+      saveMappingConfig(updatedConfig);
+      
+      // 서버에 저장 (API가 구현된 경우)
+      await saveMappingConfigToServer(updatedConfig);
+      
+      // 메시지 표시
+      toast.success(`매핑 설정 "${updatedConfig.name}"이(가) 저장되었습니다.`);
+      
+      // 매핑 완료 상태 설정 (이미 checkMappingCompletion에서 처리됨)
+      
+      // 매핑 완료 콜백 호출
+      if (onMappingComplete) {
+        onMappingComplete(selectedFileId, selectedSheet);
+      }
+    } catch (error) {
+      console.error('매핑 완료 처리 중 오류:', error);
+      toast.error('매핑 완료 처리 중 오류가 발생했습니다.');
+    }
+  };
+
+  // 필수 필드 설정 가져오기
+  const getRequiredFieldNames = (): string[] => {
+    try {
+      const configJson = localStorage.getItem(REQUIRED_FIELDS_KEY);
+      if (configJson) {
+        const config = JSON.parse(configJson);
+        if (config && config.fields && Array.isArray(config.fields)) {
+          return config.fields.map((field: RequiredField) => field.name);
+        }
+      }
+    } catch (error) {
+      console.error('필수 필드 설정을 로드하는 중 오류 발생:', error);
+    }
+    return [];
   };
 
   // 소스 필드 매핑 삭제 핸들러
@@ -583,6 +1012,14 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
         // 상태 업데이트 (깊은 복사로 참조 문제 해결)
         setActiveMappingConfig(updatedConfig);
         
+        // 해당 파일의 매핑 완료 상태 업데이트
+        if (sourceField.fileId === selectedFileId && sourceField.sheetName === selectedSheet) {
+          // 모든 타겟 필드에 현재 선택된 파일/시트의 소스 필드가 매핑되었는지 확인
+          const allFieldsMapped = checkAllFieldsMapped(updatedConfig, sourceField.fileId, sourceField.sheetName);
+          // 완료 상태 업데이트
+          updateFileMappingStatus(sourceField.fileId, allFieldsMapped);
+        }
+        
         // 매핑 업데이트 이벤트 트리거
         triggerMappingUpdated();
         
@@ -596,294 +1033,14 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
     }
   };
 
-  // 활성화된 필드맵 찾기
-  const activeField = activeMappingConfig?.fieldMaps.find(
-    field => field.id === activeFieldId
-  ) || null;
+  // 선택된 파일/시트에 대해 모든 타겟 필드가 매핑되었는지 확인
+  const checkAllFieldsMapped = (mappingConfig: MappingConfig, fileId: string, sheetName: string): boolean => {
+    if (!mappingConfig || !fileId || !sheetName) return false;
 
-  // 자동 매핑 실행
-  const handleAutoMapping = async () => {
-    if (!activeMappingConfig || !selectedFileId || !selectedSheet || sourceFields.length === 0) {
-      toast.error('자동 매핑을 위한 정보가 부족합니다.');
-      return;
-    }
-
-    setIsLoading(true);
-    const toastId = toast.loading('자동 매핑 중...');
-
-    try {
-      // 현재 설정 복제
-      const updatedConfig = { ...activeMappingConfig };
-
-      // 이전 매핑 설정 불러오기
-      const previousConfigs = loadMappingConfigs();
-      
-      // 1단계: 이전 매핑 패턴 기반 자동 매핑 시도
-      let historySuggestions = new Map<string, string[]>();
-      if (previousConfigs.length > 0) {
-        historySuggestions = suggestMappingsFromHistory(sourceFields, previousConfigs);
-        console.log('이전 패턴 기반 제안:', historySuggestions);
-      }
-      
-      // 2단계: 필드 이름 유사도 기반 매핑
-      // 각 타겟 필드에 대해 가장 적합한 소스 필드 찾기
-      const normalizedSourceFields = sourceFields.map(field => normalizeFieldName(field));
-      let mappingCount = 0;
-
-      for (const fieldMap of updatedConfig.fieldMaps) {
-        // 이미 소스 필드가 있는 경우 건너뛰기
-        if (fieldMap.sourceFields.length > 0) {
-          continue;
-        }
-
-        const normalizedTargetField = normalizeFieldName(fieldMap.targetField.name);
-        
-        // 1. 이전 매핑 패턴에서 제안된 필드 확인
-        const historyMatches = historySuggestions.get(fieldMap.targetField.name.toLowerCase());
-        if (historyMatches && historyMatches.length > 0) {
-          // 이전 패턴에서 일치하는 필드 추가
-          for (const matchedField of historyMatches) {
-            if (sourceFields.includes(matchedField)) {
-              const sourceField: SourceField = {
-                fileId: selectedFileId,
-                sheetName: selectedSheet,
-                fieldName: matchedField
-              };
-              
-              fieldMap.sourceFields.push(sourceField);
-              mappingCount++;
-              
-              console.log(`이전 매핑 패턴 일치: ${fieldMap.targetField.name} -> ${matchedField}`);
-              break; // 첫 번째 일치 항목만 사용
-            }
-          }
-          
-          // 이미 매핑된 경우 다음 필드맵으로
-          if (fieldMap.sourceFields.length > 0) {
-            continue;
-          }
-        }
-        
-        // 2. 유사도 기반 매핑
-        // 정확한 일치 확인
-        const exactMatch = sourceFields.find(
-          sourceField => normalizeFieldName(sourceField) === normalizedTargetField
-        );
-
-        if (exactMatch) {
-          const sourceField: SourceField = {
-            fileId: selectedFileId,
-            sheetName: selectedSheet,
-            fieldName: exactMatch
-          };
-          
-          fieldMap.sourceFields.push(sourceField);
-          mappingCount++;
-          continue; // 정확한 일치가 있으면 다음 필드로
-        }
-
-        // 유사도 기반 매핑 (정확한 일치가 없는 경우)
-        const similarities = normalizedSourceFields.map((normalizedSourceField, index) => ({
-          sourceField: sourceFields[index],
-          similarity: combinedSimilarity(normalizedSourceField, normalizedTargetField)
-        }));
-
-        // 유사도 점수로 정렬
-        similarities.sort((a, b) => b.similarity - a.similarity);
-
-        // 가장 높은 유사도 필드 사용 (임계값 이상인 경우)
-        if (similarities.length > 0 && similarities[0].similarity > 0.6) {
-          const sourceField: SourceField = {
-            fileId: selectedFileId,
-            sheetName: selectedSheet,
-            fieldName: similarities[0].sourceField
-          };
-          
-          fieldMap.sourceFields.push(sourceField);
-          mappingCount++;
-        }
-      }
-
-      // 3단계: 최적 매핑 알고리즘 적용
-      // 아직 매핑되지 않은 필드에 대해 최적의 매핑 찾기
-      const unmappedTargetFields = updatedConfig.fieldMaps
-        .filter(fieldMap => fieldMap.sourceFields.length === 0)
-        .map(fieldMap => fieldMap.targetField.name);
-
-      if (unmappedTargetFields.length > 0) {
-        const optimalMappings = findOptimalFieldMappings(
-          unmappedTargetFields, 
-          sourceFields.filter(sourceField => {
-            // 이미 매핑된 소스 필드 제외
-            const isAlreadyMapped = updatedConfig.fieldMaps.some(fieldMap => 
-              fieldMap.sourceFields.some(sf => sf.fieldName === sourceField)
-            );
-            return !isAlreadyMapped;
-          })
-        );
-
-        // 최적 매핑 적용
-        for (const [targetField, sourceField] of Object.entries(optimalMappings)) {
-          if (sourceField) {
-            const fieldMap = updatedConfig.fieldMaps.find(
-              fm => fm.targetField.name === targetField && fm.sourceFields.length === 0
-            );
-            
-            if (fieldMap) {
-              fieldMap.sourceFields.push({
-                fileId: selectedFileId,
-                sheetName: selectedSheet,
-                fieldName: sourceField
-              });
-              mappingCount++;
-            }
-          }
-        }
-      }
-
-      // 매핑 결과 저장
-      updatedConfig.updated = Date.now();
-      saveMappingConfig(updatedConfig);
-      
-      // 상태 업데이트 및 결과 알림
-      updateMappingAfterAutoMapping(updatedConfig, mappingCount);
-      
-      toast.success(`자동 매핑 완료: ${mappingCount}개 필드 매핑됨`, { id: toastId });
-    } catch (error) {
-      console.error('자동 매핑 중 오류 발생:', error);
-      toast.error('자동 매핑 중 오류가 발생했습니다.', { id: toastId });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // 매핑 정리 및 재설정
-  const handleCleanupMapping = async () => {
-    if (!activeMappingConfig) {
-      toast.error('매핑 설정이 없습니다.');
-      return;
-    }
-
-    try {
-      // 필수 필드 검증
-      const requiredFieldNames = getRequiredFieldNames();
-      
-      if (requiredFieldNames.length > 0) {
-        const validationResult = validateMappingConfig(activeMappingConfig, requiredFieldNames);
-        
-        if (!validationResult.isValid) {
-          // 필수 필드 누락 메시지 구성
-          const missingFields = validationResult.errors
-            .filter(error => error.type === 'missing_target' || error.type === 'missing_source')
-            .map(error => error.field || '알 수 없는 필드');
-          
-          if (missingFields.length > 0) {
-            const confirmMessage = `필수 필드가 매핑되지 않았습니다:\n${missingFields.join(', ')}\n\n계속 진행하시겠습니까?`;
-            
-            if (!window.confirm(confirmMessage)) {
-              return;
-            }
-          }
-        }
-      }
-    
-      // 현재 매핑 설정에서 잘못된 형식의 필드맵 정리
-      const updatedConfig = { ...activeMappingConfig };
-      
-      // 유효한 필드맵만 필터링
-      const validFieldMaps = updatedConfig.fieldMaps.filter(fieldMap => {
-        return fieldMap.targetField && 
-               fieldMap.targetField.name && 
-               !fieldMap.targetField.name.startsWith('field_') &&
-               !fieldMap.targetField.name.startsWith('fieldmap_');
-      });
-      
-      // 중복 ID 제거
-      const uniqueFieldMaps: FieldMap[] = [];
-      const fieldMapIds = new Set<string>();
-      
-      validFieldMaps.forEach(fieldMap => {
-        if (!fieldMapIds.has(fieldMap.id)) {
-          fieldMapIds.add(fieldMap.id);
-          uniqueFieldMaps.push(fieldMap);
-        }
-      });
-      
-      updatedConfig.fieldMaps = uniqueFieldMaps;
-      updatedConfig.updated = Date.now();
-      
-      // 로컬 스토리지에 저장
-      const allConfigs = loadMappingConfigs();
-      const configIndex = allConfigs.findIndex(config => config.id === updatedConfig.id);
-      
-      if (configIndex !== -1) {
-        allConfigs[configIndex] = updatedConfig;
-        localStorage.setItem('excel_merger_mapping_configs', JSON.stringify(allConfigs));
-        
-        // 상태 업데이트
-        setActiveMappingConfig(updatedConfig);
-        
-        // 서버에 매핑 설정 저장 시도
-        const toastId = toast.loading('매핑 설정을 서버에 저장 중...');
-        
-        try {
-          const saved = await saveMappingConfigToServer(updatedConfig);
-          
-          if (saved) {
-            toast.success('매핑 설정이 서버에 저장되었습니다.', {
-              id: toastId
-            });
-          } else {
-            toast.error('서버 저장에 실패했습니다. 로컬에만 저장됩니다.', {
-              id: toastId
-            });
-          }
-        } catch (error) {
-          console.error('서버 저장 중 오류:', error);
-          toast.error('서버 저장 중 오류가 발생했습니다.', {
-            id: toastId
-          });
-        }
-        
-        // 매핑 업데이트 이벤트 트리거
-        triggerMappingUpdated();
-        
-        // 첫 번째 필드맵이 있으면 활성화
-        if (updatedConfig.fieldMaps.length > 0) {
-          setActiveFieldId(updatedConfig.fieldMaps[0].id);
-        } else {
-          setActiveFieldId(null);
-        }
-        
-        toast.success('매핑 설정이 정리되었습니다.');
-        
-        // 매핑 완료 콜백 호출
-        if (onMappingComplete) {
-          onMappingComplete();
-        }
-      } else {
-        toast.error('매핑 설정을 업데이트할 수 없습니다.');
-      }
-    } catch (error) {
-      console.error('매핑 정리 중 오류 발생:', error);
-      toast.error('매핑 정리 중 오류가 발생했습니다.');
-    }
-  };
-
-  // 필수 필드 설정 가져오기
-  const getRequiredFieldNames = (): string[] => {
-    try {
-      const configJson = localStorage.getItem(REQUIRED_FIELDS_KEY);
-      if (configJson) {
-        const config = JSON.parse(configJson);
-        if (config && config.fields && Array.isArray(config.fields)) {
-          return config.fields.map((field: RequiredField) => field.name);
-        }
-      }
-    } catch (error) {
-      console.error('필수 필드 설정을 로드하는 중 오류 발생:', error);
-    }
-    return [];
+    // 매핑 설정의 모든 타겟 필드가 현재 파일/시트에 매핑되었는지 확인
+    return mappingConfig.fieldMaps.every(fieldMap => 
+      fieldMap.sourceFields.some(sf => sf.fileId === fileId && sf.sheetName === sheetName)
+    );
   };
 
   return (
@@ -930,7 +1087,7 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
               <label className="text-xs text-muted-foreground mb-1 block">파일</label>
               <Select
                 value={selectedFileId}
-                onValueChange={setSelectedFileId}
+                onValueChange={handleFileChange}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="파일 선택" />
@@ -938,7 +1095,14 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
                 <SelectContent>
                   {files.map((file) => (
                     <SelectItem key={file.id} value={file.id}>
-                      {file.name}
+                      <div className="flex items-center justify-between w-full">
+                        <span>{file.name}</span>
+                        {filesMappingStatus[file.id] && (
+                          <span className="ml-2 bg-green-100 text-green-800 text-xs font-medium px-2 py-0.5 rounded">
+                            매핑완료
+                          </span>
+                        )}
+                      </div>
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -983,7 +1147,7 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
             {/* 자동 매핑 버튼 */}
             <div className="flex items-end">
               <Button
-                onClick={handleAutoMapping}
+                onClick={() => handleAutoMapping()}
                 disabled={!activeMappingConfig || !selectedFileId || !selectedSheet || isLoading}
                 className="gap-2 w-full"
                 variant="secondary"
@@ -1048,13 +1212,15 @@ export default function FieldMapper({ onMappingComplete }: FieldMapperProps) {
                     onFieldSelect={handleFieldSelect}
                     onAddTarget={() => setAddTargetDialogOpen(true)}
                     onDeleteSourceMapping={handleDeleteSourceMapping}
+                    selectedFileId={selectedFileId}
+                    selectedSheet={selectedSheet}
                   />
                 </div>
               </div>
 
               {/* 매핑 연결선 */}
               <MappingConnection
-                activeField={activeField}
+                activeField={activeMappingConfig?.fieldMaps.find(fm => fm.id === activeFieldId) || null}
                 isDragging={isDragging}
               />
             </div>

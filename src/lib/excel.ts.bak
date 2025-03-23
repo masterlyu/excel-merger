@@ -1,6 +1,5 @@
 import * as XLSX from 'xlsx';
 import { v4 as uuidv4 } from 'uuid';
-import { analyzeDocument } from './documentAnalyzer';
 const { utils } = XLSX;
 
 // 허용된 파일 타입
@@ -50,80 +49,6 @@ export interface ExcelFileInfo {
   sheets: { name: string; rowCount?: number }[];
   recordCount?: number;
   data: string; // JSON 문자열 데이터
-}
-
-/**
- * DocumentAnalyzer 결과를 SheetData 형식으로 변환하는 어댑터 함수
- * analyzeDocument의 결과를 UI 컴포넌트에서 사용하는 형식으로 변환합니다.
- */
-function adaptAnalyzerResultToSheetData(
-  jsonData: any[][], 
-  sheetName: string, 
-  analyzerResult: { 
-    patternName: string,
-    headerRowIndex: number,
-    dataStartRowIndex: number,
-    dataEndRowIndex: number
-  }
-): SheetData {
-  console.log(`[adaptAnalyzerResultToSheetData] 문서 분석 결과 변환: 패턴=${analyzerResult.patternName}, 헤더행=${analyzerResult.headerRowIndex}, 데이터시작=${analyzerResult.dataStartRowIndex}, 데이터종료=${analyzerResult.dataEndRowIndex}`);
-  
-  // 헤더 추출
-  const headerRow = jsonData[analyzerResult.headerRowIndex] || [];
-  const headers = headerRow
-    .map(cell => (cell !== null ? String(cell).trim() : ''))
-    .filter(header => header !== '');
-  
-  // 중복 헤더 처리
-  const uniqueHeaders = makeHeadersUnique(headers);
-  
-  // 데이터 행 추출 (시작 행부터 종료 행까지)
-  const dataRows = jsonData.slice(
-    analyzerResult.dataStartRowIndex, 
-    analyzerResult.dataEndRowIndex + 1
-  );
-  
-  // 객체 배열로 변환
-  const data = dataRows.map((row: any[]) => {
-    const obj: Record<string, string | number | null> = {};
-    
-    uniqueHeaders.forEach((header, index) => {
-      if (index < row.length) {
-        // null 값 처리
-        if (row[index] === null || row[index] === undefined) {
-          obj[header] = null;
-        } 
-        // 날짜 값 처리 (Excel 날짜)
-        else if (row[index] instanceof Date) {
-          obj[header] = formatDate(row[index] as Date);
-        } 
-        // 숫자 값 처리
-        else if (typeof row[index] === 'number') {
-          obj[header] = row[index];
-        } 
-        // 문자열 값 처리
-        else {
-          obj[header] = String(row[index]).trim();
-        }
-      } else {
-        obj[header] = null;
-      }
-    });
-    
-    return obj;
-  }).filter(row => Object.values(row).some(value => value !== null));
-  
-  // SheetData 객체 반환 (기존 형식과 호환됨)
-  return {
-    name: sheetName,
-    headers: uniqueHeaders,
-    data: data,
-    totalRows: data.length,
-    headerRow: analyzerResult.headerRowIndex + 1, // 1-기반 인덱스로 변환
-    dataStartRow: analyzerResult.dataStartRowIndex + 1, // 1-기반 인덱스로 변환
-    title: analyzerResult.patternName !== 'Standard Excel' ? 
-      `문서 유형: ${analyzerResult.patternName}` : undefined
-  };
 }
 
 /**
@@ -186,15 +111,65 @@ export async function readExcelFile(file: File): Promise<{
         
         console.log(`[readExcelFile] 시트 데이터 변환 완료, 행 수: ${jsonData.length}`);
         
-        // documentAnalyzer를 사용하여 문서 구조 분석
-        const analyzerResult = analyzeDocument(jsonData);
-        console.log(`[readExcelFile] 문서 분석 결과: `, analyzerResult);
+        // 첫 번째 행을 헤더로 사용
+        const headers = (jsonData[0] as any[])
+          .map(cell => (cell !== null ? String(cell).trim() : ''))
+          .filter(header => header !== '');
         
-        // 분석 결과를 SheetData 형식으로 변환
-        const sheetData = adaptAnalyzerResultToSheetData(jsonData, sheetName, analyzerResult);
+        console.log(`[readExcelFile] 헤더 추출 완료, 개수: ${headers.length}`);
+        console.log(`[readExcelFile] 헤더 샘플:`, headers.slice(0, 5));
+        
+        // 중복 헤더 처리
+        const uniqueHeaders = makeHeadersUnique(headers);
+        
+        // 헤더 이후의 행을 데이터로 변환
+        const rows = jsonData.slice(1) as any[][];
+        
+        // 객체 배열로 변환
+        const data = rows.map((row: any[]) => {
+          const obj: Record<string, string | number | null> = {};
+          
+          uniqueHeaders.forEach((header, index) => {
+            if (index < row.length) {
+              // null 값 처리
+              if (row[index] === null || row[index] === undefined) {
+                obj[header] = null;
+              } 
+              // 날짜 값 처리 (Excel 날짜)
+              else if (row[index] instanceof Date) {
+                obj[header] = formatDate(row[index] as Date);
+              } 
+              // 숫자 값 처리
+              else if (typeof row[index] === 'number') {
+                obj[header] = row[index];
+              } 
+              // 문자열 값 처리
+              else {
+                obj[header] = String(row[index]).trim();
+              }
+            } else {
+              obj[header] = null;
+            }
+          });
+          
+          return obj;
+        }).filter(row => Object.values(row).some(value => value !== null));
+        
+        console.log(`[readExcelFile] 데이터 행 변환 완료, 개수: ${data.length}`);
+        
+        if (data.length > 0) {
+          console.log(`[readExcelFile] 첫 번째 데이터 행 샘플:`, data[0]);
+        }
         
         // 결과 저장
-        result.sheets[sheetName] = sheetData;
+        result.sheets[sheetName] = {
+          name: sheetName,
+          headers: uniqueHeaders,
+          data: data,
+          totalRows: data.length,
+          headerRow: 1,
+          dataStartRow: 2
+        };
       } catch (error) {
         console.error(`[readExcelFile] 시트 처리 오류: ${sheetName}`, error);
       }
@@ -449,9 +424,6 @@ export async function getSheetData(fileId: string, sheetName: string): Promise<S
       }
       
       console.log(`[getSheetData] 시트 '${sheetName}' 찾음, 헤더 수: ${sheetData.headers?.length}, 데이터 행 수: ${sheetData.data?.length}`);
-      
-      // 데이터 처리 (원본 유지)
-      // 중요: 여기서는 특수 문서 감지 로직을 제거하고, 모든 데이터를 그대로 반환합니다
       
       // 시트 데이터 반환
       return {

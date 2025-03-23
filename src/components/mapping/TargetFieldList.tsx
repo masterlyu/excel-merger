@@ -19,6 +19,7 @@ import { toast } from 'react-hot-toast';
 import { triggerMappingUpdated } from './DragAndDropProvider';
 import { validateFieldMap } from '@/lib/validation';
 import { ValidationIndicator } from './ValidationIndicator';
+import { DraggableFieldTarget } from './DraggableFieldTarget';
 
 // 매핑 이벤트 이름 (DragAndDropProvider.tsx와 일치해야 함)
 const MAPPING_UPDATED_EVENT = 'mappingUpdated';
@@ -42,9 +43,11 @@ interface TargetFieldListProps {
   onDeleteSourceMapping: (
     targetFieldId: string, 
     sourceFileId: string, 
-    sourceFieldName: string, 
+    sourceFieldName: string,
     sourceSheetName: string
   ) => void;
+  selectedFileId?: string;  // 선택된 파일 ID
+  selectedSheet?: string;   // 선택된 시트 이름
 }
 
 /**
@@ -56,7 +59,9 @@ export function TargetFieldList({
   activeFieldId,
   onFieldSelect,
   onAddTarget,
-  onDeleteSourceMapping
+  onDeleteSourceMapping,
+  selectedFileId,
+  selectedSheet
 }: TargetFieldListProps) {
   // 디버깅을 위한 로깅
   useEffect(() => {
@@ -151,6 +156,28 @@ export function TargetFieldList({
     return requiredFields.some(name => name.toLowerCase() === fieldName.toLowerCase());
   };
 
+  // 현재 선택된 파일과 시트에 매핑된 소스 필드 카운트
+  const getCurrentFileMappingCount = (fieldMap: FieldMap) => {
+    if (!selectedFileId || !selectedSheet) return 0;
+    
+    return fieldMap.sourceFields.filter(
+      sf => sf.fileId === selectedFileId && sf.sheetName === selectedSheet
+    ).length;
+  };
+
+  // 필드맵을 현재 선택된 파일/시트에 매핑된 소스 필드 우선 순위로 정렬
+  const sortedFieldMaps = [...localTargetFields].sort((a, b) => {
+    const aCount = getCurrentFileMappingCount(a);
+    const bCount = getCurrentFileMappingCount(b);
+    
+    // 현재 파일에 매핑된 필드 우선
+    if (aCount > 0 && bCount === 0) return -1;
+    if (aCount === 0 && bCount > 0) return 1;
+    
+    // 둘 다 매핑되었으면 이름순
+    return a.targetField.name.localeCompare(b.targetField.name);
+  });
+
   if (!mappingConfig) {
     return (
       <div className="text-center p-4">
@@ -174,109 +201,106 @@ export function TargetFieldList({
 
   return (
     <div className="space-y-3">
-      {localTargetFields.map((field) => {
-        const isActive = activeFieldId === field.id;
+      {sortedFieldMaps.map((fieldMap) => {
+        const isActive = activeFieldId === fieldMap.id;
         
-        // 유효한 소스 필드만 필터링
-        const validSourceFields = field.sourceFields?.filter(sf => 
-          sf && sf.fileId && sf.sheetName && sf.fieldName
-        ) || [];
+        // 필드맵에 할당된 현재 선택된 파일/시트의 소스 필드
+        const currentSourceFields = selectedFileId && selectedSheet 
+          ? fieldMap.sourceFields.filter(
+              sf => sf.fileId === selectedFileId && sf.sheetName === selectedSheet
+            )
+          : [];
+          
+        // 모든 소스 필드 (다른 파일에서 매핑된 항목 포함)
+        const allSourceFields = fieldMap.sourceFields;
         
-        // 소스 필드 개수에 따른 안내 메시지
-        const sourceFieldsMessage = validSourceFields.length === 0
-          ? "여기에 소스 필드를 드롭하세요"
-          : `${validSourceFields.length}개 필드 매핑됨`;
-        
+        // 다른 파일에서 매핑된 소스 필드 (현재 선택된 파일/시트 제외)
+        const otherSourceFields = selectedFileId && selectedSheet
+          ? fieldMap.sourceFields.filter(
+              sf => sf.fileId !== selectedFileId || sf.sheetName !== selectedSheet
+            )
+          : fieldMap.sourceFields;
+
         // 해당 필드의 필수 여부 확인
-        const required = isRequiredField(field.targetField.name);
+        const required = isRequiredField(fieldMap.targetField.name);
         
         // 필드맵 유효성 검증
-        const validationResult = validateFieldMap(field, required);
+        const validationResult = validateFieldMap(fieldMap, required);
         
         return (
           <div
-            key={field.id}
-            id={`target-${field.id}`}
-            data-field-id={field.id}
-            className={`border rounded-md ${isActive ? 'border-blue-500 ring-1 ring-blue-200' : 'border-gray-200'}`}
-            onClick={() => onFieldSelect(field.id)}
+            key={fieldMap.id}
+            className={`p-3 border rounded-md cursor-pointer transition-all ${
+              isActive ? 'bg-muted/50 border-primary' : 'hover:bg-muted/20'
+            }`}
+            onClick={() => onFieldSelect(fieldMap.id)}
           >
-            {/* 타겟 필드 헤더 */}
-            <div className={`px-3 py-2 flex justify-between items-center ${isActive ? 'bg-blue-50' : 'bg-muted/30'}`}>
-              <div>
-                <div className="font-medium text-sm">{field.targetField.name}</div>
-                <div className="text-xs text-muted-foreground">{field.targetField.type || '유형 없음'}</div>
-              </div>
-              <Badge variant={isActive ? "default" : "outline"} className="text-xs">
-                {validSourceFields.length}개
-              </Badge>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-medium">
+                {fieldMap.targetField.name}
+                <span className="ml-2 text-xs text-muted-foreground">
+                  {fieldMap.targetField.type}
+                </span>
+              </h3>
             </div>
             
-            {/* 드롭 영역 */}
-            <div className="p-2 border-t border-dashed">
-              <Droppable droppableId={`droppable-${field.id}`}>
-                {(provided, snapshot) => (
-                  <div
-                    ref={provided.innerRef}
-                    {...provided.droppableProps}
-                    className={`p-2 min-h-16 rounded-md border ${
-                      snapshot.isDraggingOver 
-                        ? 'border-blue-400 bg-blue-50' 
-                        : validSourceFields.length > 0 
-                          ? 'border-gray-200 bg-white' 
-                          : 'border-dashed border-gray-300 bg-gray-50'
-                    }`}
-                  >
-                    {/* 소스 필드 목록 표시 */}
-                    {validSourceFields.length > 0 ? (
-                      <div className="flex flex-wrap gap-1">
-                        {validSourceFields.map((sourceField, index) => {
-                          // 소스 필드 ID 생성
-                          const sourceFieldId = `${sourceField.fileId}_${sourceField.sheetName}_${sourceField.fieldName}`;
-                          
-                          return (
-                            <div 
-                              key={`${sourceFieldId}-${index}`} 
-                              className="bg-blue-50 border border-blue-100 rounded px-2 py-1 text-xs flex items-center"
-                              id={`mapped-${sourceFieldId}`}
-                              data-source-field={sourceFieldId}
-                            >
-                              <div className="flex items-center">
-                                <span className="font-medium truncate max-w-[120px]" title={sourceField.fieldName}>
-                                  {sourceField.fieldName}
-                                </span>
-                                {sourceField.sheetName && (
-                                  <Badge variant="outline" className="ml-1 text-[10px] py-0 h-4">
-                                    {sourceField.sheetName}
-                                  </Badge>
-                                )}
-                              </div>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-4 w-4 ml-1 hover:bg-blue-100 p-0"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  deleteSourceMapping(field.id, sourceField.fileId, sourceField.fieldName, sourceField.sheetName);
-                                }}
-                                title="소스 필드 매핑 삭제"
-                              >
-                                <Trash2 className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <div className="text-center text-muted-foreground text-xs p-2">
-                        {sourceFieldsMessage}
-                      </div>
-                    )}
-                    {provided.placeholder}
+            <DraggableFieldTarget 
+              targetFieldId={fieldMap.id} 
+              targetFieldName={fieldMap.targetField.name}
+              isActive={isActive}
+            >
+              {currentSourceFields.length > 0 ? (
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {currentSourceFields.map((sourceField, index) => (
+                    <Badge 
+                      key={`${sourceField.fileId}_${sourceField.fieldName}_${index}`}
+                      variant="outline"
+                      className="flex items-center gap-1 bg-primary/5 border-primary/20"
+                    >
+                      <span className="max-w-[200px] truncate">{sourceField.fieldName}</span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-4 w-4 p-0 hover:bg-destructive/10 rounded-full"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteSourceMapping(fieldMap.id, sourceField.fileId, sourceField.fieldName, sourceField.sheetName);
+                        }}
+                      >
+                        <X className="h-3 w-3" />
+                      </Button>
+                    </Badge>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground mt-2">
+                  소스 필드를 여기에 끌어다 놓으세요.
+                </p>
+              )}
+              
+              {/* 다른 파일에서 매핑된 소스 필드 표시 (현재 선택된 파일/시트 외의 매핑) */}
+              {otherSourceFields.length > 0 && (
+                <div className="mt-3 pt-2 border-t border-dashed">
+                  <p className="text-xs text-muted-foreground mb-2">
+                    다른 파일에서 매핑됨:
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {otherSourceFields.map((sourceField, index) => (
+                      <Badge 
+                        key={`other_${sourceField.fileId}_${sourceField.fieldName}_${index}`}
+                        variant="outline"
+                        className="flex items-center gap-1 bg-secondary/10 border-secondary/20"
+                      >
+                        <span className="max-w-[160px] truncate text-xs">{sourceField.fieldName}</span>
+                        <span className="text-xs text-muted-foreground ml-1">
+                          ({sourceField.sheetName})
+                        </span>
+                      </Badge>
+                    ))}
                   </div>
-                )}
-              </Droppable>
-            </div>
+                </div>
+              )}
+            </DraggableFieldTarget>
             
             {/* 필수 필드 표시 */}
             {required && (
@@ -294,6 +318,15 @@ export function TargetFieldList({
           </div>
         );
       })}
+      
+      <Button 
+        variant="ghost" 
+        className="border border-dashed w-full mt-4 text-muted-foreground hover:text-foreground"
+        onClick={onAddTarget}
+      >
+        <Plus className="h-4 w-4 mr-2" />
+        대상 필드 추가
+      </Button>
     </div>
   );
 } 
