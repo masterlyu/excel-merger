@@ -4,7 +4,7 @@ import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { FileUp, Table2, FileCheck } from 'lucide-react';
 import { useFileStore } from '@/store/files';
-import { getMappingConfigs } from '@/lib/mapping';
+import { loadMappingConfigs } from '@/lib/mapping';
 
 const steps = [
   {
@@ -36,7 +36,7 @@ export function Navigation() {
   const currentStepIndex = steps.findIndex(step => step.href === pathname);
   
   // 매핑 설정 가져오기
-  const mappingConfigs = React.useMemo(() => getMappingConfigs(), []);
+  const mappingConfigs = React.useMemo(() => loadMappingConfigs(), []);
   const hasMappingConfigs = mappingConfigs.length > 0;
   
   // 파일 업로드 상태

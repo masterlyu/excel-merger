@@ -8,9 +8,9 @@ import { StandardField } from '@/types/mapping';
 export function RecordMappingArea() {
   const { configs, activeConfigId, selectedStandardFieldId } = useMappingStore();
   
-  const activeConfig = configs.find(c => c.id === activeConfigId);
+  const activeConfig = configs.find((c: { id: string }) => c.id === activeConfigId);
   const selectedField = activeConfig?.standardFields.find(
-    f => f.id === selectedStandardFieldId
+    (f: { id: string }) => f.id === selectedStandardFieldId
   );
 
   if (!activeConfig) {
@@ -63,7 +63,7 @@ export function RecordMappingArea() {
             <ScrollArea className="h-[200px] rounded-md border p-2">
               {mappedRecords.length > 0 ? (
                 <div className="space-y-2">
-                  {mappedRecords.map((record) => (
+                  {mappedRecords.map((record: { sourceField: string; rules?: any[] }) => (
                     <div
                       key={record.sourceField}
                       className="flex items-center justify-between p-2 rounded-lg bg-muted"

@@ -2,6 +2,7 @@ import React from 'react';
 import { Button } from '@/components/ui/button';
 import { useFileStore } from '@/store/file';
 import { Upload } from 'lucide-react';
+import { ExcelFileInfo } from "@/lib/excel";
 
 interface FileSelectorProps {
   onFileSelect?: (fileId: string) => void;
@@ -32,7 +33,7 @@ export function FileSelector({ onFileSelect }: FileSelectorProps) {
       </div>
 
       <div className="grid gap-2">
-        {files.map((file) => (
+        {files.map((file: ExcelFileInfo) => (
           <Button
             key={file.id}
             variant={activeFileId === file.id ? 'default' : 'outline'}
@@ -42,7 +43,7 @@ export function FileSelector({ onFileSelect }: FileSelectorProps) {
             <div className="flex items-center space-x-2">
               <span className="truncate">{file.name}</span>
               <span className="text-xs text-muted-foreground">
-                ({file.records.length}개 레코드)
+                ({file.recordCount || 0}개 레코드)
               </span>
             </div>
           </Button>

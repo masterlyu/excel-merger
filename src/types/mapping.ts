@@ -7,6 +7,14 @@ export interface StandardField {
   type: 'text' | 'number' | 'date' | 'combined';
 }
 
+// 컬럼 매핑 인터페이스
+export interface ColumnMapping {
+  sourceSheet: string;
+  sourceColumn: string;
+  targetColumn: string;
+  transformRule: string;
+}
+
 // 레코드 매핑 정의
 export interface RecordMapping {
   sourceField: string;
@@ -67,12 +75,6 @@ export interface Record {
 export interface Mapping {
   recordId: string;
   sourceField: string;
-}
-
-// 매핑 규칙 (필요한 경우 확장)
-export interface MappingRule {
-  type: string;
-  value: any;
 }
 
 // 매핑 상태

@@ -50,6 +50,7 @@ export interface ExcelFileInfo {
   sheets: { name: string; rowCount?: number }[];
   recordCount?: number;
   data: string; // JSON 문자열 데이터
+  mappingCompleted?: boolean; // 매핑 완료 여부
 }
 
 /**

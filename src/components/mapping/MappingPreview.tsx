@@ -259,7 +259,7 @@ export default function MappingPreview({ mappingConfig, limit = 10 }: MappingPre
                 
                 {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
                   // 표시할 페이지 번호 계산
-                  let pageNumber;
+                  let pageNumber: number;
                   if (totalPages <= 5) {
                     pageNumber = i + 1;
                   } else if (currentPage <= 3) {

@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { useMappingStore } from '@/store/mapping';
 import { Plus, Pencil } from 'lucide-react';
 import { FieldDialog } from './FieldDialog';
-import { Field } from '@/store/mapping';
+import { Field, MappingConfig } from '@/store/mapping';
 
 export function FieldList() {
   const { activeConfigId, configs, selectedFieldId, setSelectedField } = useMappingStore();
@@ -12,7 +12,7 @@ export function FieldList() {
   const [selectedEditField, setSelectedEditField] = React.useState<Field | null>(null);
 
   // 현재 활성화된 매핑 설정 가져오기
-  const activeConfig = configs.find(c => c.id === activeConfigId);
+  const activeConfig = configs.find((c: MappingConfig) => c.id === activeConfigId);
 
   const handleAddField = () => {
     setSelectedEditField(null);
@@ -60,7 +60,7 @@ export function FieldList() {
       ) : (
         <ScrollArea className="flex-1">
           <div className="p-4 space-y-2">
-            {activeConfig?.fields.map((field) => (
+            {activeConfig?.fields.map((field: Field) => (
               <div
                 key={field.id}
                 className={`
@@ -87,7 +87,7 @@ export function FieldList() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    onClick={(e) => {
+                    onClick={(e: React.MouseEvent) => {
                       e.stopPropagation();
                       handleEditField(field);
                     }}

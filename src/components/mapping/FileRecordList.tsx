@@ -4,12 +4,21 @@ import { useFileStore } from "@/store/files";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Droppable, Draggable } from "@hello-pangea/dnd";
 import { Info } from "lucide-react";
+import { ExcelFileInfo } from '@/lib/excel';
+
+// 헤더 인터페이스 정의
+interface HeaderField {
+  id: string;
+  name: string;
+  description?: string;
+  dataType?: string;
+}
 
 export function FileRecordList() {
   const { files, activeFileId, getFileHeaders } = useFileStore();
   
   // 활성 파일 가져오기
-  const activeFile = files.find(f => f.id === activeFileId);
+  const activeFile = files.find((f: ExcelFileInfo) => f.id === activeFileId);
   
   // 활성 파일의 헤더(필드) 가져오기
   const headers = activeFileId ? getFileHeaders(activeFileId) : [];
@@ -48,11 +57,11 @@ export function FileRecordList() {
               ref={provided.innerRef}
               {...provided.droppableProps}
             >
-              <div className="p-2 space-y-2">
+              <div className="p-4 space-y-2">
                 {headers.length > 0 ? (
-                  headers.map((header, index) => (
+                  headers.map((header: HeaderField, index: number) => (
                     <Draggable key={header.id} draggableId={header.id} index={index}>
-                      {(provided) => (
+                      {(provided, snapshot) => (
                         <div
                           ref={provided.innerRef}
                           {...provided.draggableProps}

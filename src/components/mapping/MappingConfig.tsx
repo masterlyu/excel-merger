@@ -128,16 +128,14 @@ export default function MappingConfigManager({ onSelect }: MappingConfigProps) {
                   </p>
                 )}
                 <div className="mt-1 flex flex-wrap gap-1">
-                  {config.records.map((record) => (
-                    <Badge key={record} variant="secondary">
-                      {record}
-                    </Badge>
-                  ))}
+                  <Badge variant="secondary">
+                    {config.name}
+                  </Badge>
                 </div>
                 <p className="text-xs text-gray-400 mt-1">
-                  생성: {new Date(config.createdAt).toLocaleDateString()}
-                  {' • '}
-                  수정: {new Date(config.updatedAt).toLocaleDateString()}
+                  생성: {new Date(config.created).toLocaleDateString()}
+                  {config.updated && (' • ')}
+                  {config.updated && ('수정: ' + new Date(config.updated).toLocaleDateString())}
                 </p>
               </div>
               <div className="flex items-center space-x-2 ml-4">

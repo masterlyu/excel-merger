@@ -14,7 +14,7 @@ export function StandardFieldList() {
   const [openRecordDialog, setOpenRecordDialog] = React.useState(false);
 
   // 현재 활성화된 매핑 설정 가져오기
-  const activeConfig = configs.find(c => c.id === activeConfigId);
+  const activeConfig = configs.find((c: { id: string }) => c.id === activeConfigId);
   const standardFields = activeConfig?.standardFields || [];
 
   const handleFieldClick = (field: StandardField) => {
